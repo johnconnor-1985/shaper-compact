@@ -1,2 +1,2 @@
 # shaper-compact
-Installer and configuration files for Velvet Shaper Compact
+Installer and configuration files for Shaper Compact
