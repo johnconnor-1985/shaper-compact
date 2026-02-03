@@ -98,7 +98,6 @@ echo ""
 echo "[1/9] Ensure required directories exist..."
 mkdir -p "$USB_DIR"
 sudo mkdir -p "$MOUNT_POINT"
-sudo chown "${USER_NAME}:${USER_NAME}" "$MOUNT_POINT"
 
 # ------------------------------------------------------------
 # SAFE CLEANUP STRATEGY
