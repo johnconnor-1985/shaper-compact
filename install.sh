@@ -14,7 +14,7 @@ echo ""
 # Verifica che non sia root
 if [ "$EUID" -eq 0 ]; then
   echo "❌ Non eseguire come root."
-  echo "Esegui come utente normale (es. velvet)."
+  echo "Esegui come utente normale."
   exit 1
 fi
 
