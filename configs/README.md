@@ -7,3 +7,4 @@ These files are copied in `~/printer_data/config/` by the installer.
 - crwosnest.conf
 - mainsail.cfg
 - KlipperScreen.conf
+- moonraker.conf
