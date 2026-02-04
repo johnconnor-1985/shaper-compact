@@ -215,8 +215,8 @@ rm -f "$USB_DIR"/* 2>/dev/null || true
 # Step 4: Ensure exFAT support
 # ------------------------------------------------------------
 echo "[4/5] Installing exFAT support..."
-sudo apt update
-sudo apt install -y exfat-fuse exfatprogs
+sudo apt-get update
+sudo apt-get install -y exfat-fuse exfatprogs
 
 # ------------------------------------------------------------
 # Step 5: Install usb-gcode handler + systemd + udev
