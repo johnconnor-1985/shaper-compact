@@ -9,9 +9,11 @@ set -euo pipefail
 #     - Expose ONLY *.gcode files in:  ~/printer_data/gcodes/USB
 #     - Use technical mount point:     /media/usb
 #     - Cleanup gcodes root: delete everything except "USB"
-#  2) Deploy config:
+#  2) Deploy config from Git:
 #     - Pull shaper-compact repo (or use local repo if running inside it)
-#     - Copy configs/setup.cfg -> <printer_data>/config/Configs/setup.cfg
+#     - Copy files from repo ./configs to Klipper config directories:
+#         * macros.cfg, setup.cfg -> <printer_data>/config/Configs/
+#         * all others            -> <printer_data>/config/
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -46,7 +48,6 @@ echo "Shaper Compact Installer"
 echo "Log: $LOG"
 echo
 
-# Do not run as root
 if [[ "${EUID}" -eq 0 ]]; then
   echo "Do not run as root. Run as the normal user (e.g. velvet)." >&2
   exit 1
@@ -87,7 +88,6 @@ MOUNT_POINT="/media/usb"
 
 CONFIG_ROOT="${PRINTER_DATA}/config"
 TARGET_CONFIGS_DIR="${CONFIG_ROOT}/Configs"
-TARGET_SETUP_CFG="${TARGET_CONFIGS_DIR}/setup.cfg"
 
 UID_NUM="$(id -u "${USER_NAME}")"
 GID_NUM="$(id -g "${USER_NAME}")"
@@ -97,13 +97,13 @@ GID_NUM="$(id -g "${USER_NAME}")"
 # ------------------------------------------------------------
 echo "[1/5] Preparing directories..."
 mkdir -p "$GCODE_ROOT" "$USB_DIR"
-mkdir -p "$TARGET_CONFIGS_DIR"
+mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR"
 sudo mkdir -p "$MOUNT_POINT"
 
 # ------------------------------------------------------------
-# Step 2: Sync repo and deploy setup.cfg
+# Step 2: Sync repo and deploy config files
 # ------------------------------------------------------------
-echo "[2/5] Syncing repository and deploying setup.cfg..."
+echo "[2/5] Syncing repository and deploying configuration..."
 
 REPO_URL="https://github.com/johnconnor-1985/shaper-compact.git"
 REPO_BRANCH="main"
@@ -113,7 +113,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$DEFAULT_REPO_DIR"
 
 # Prefer local repo if script is executed from within shaper-compact
-if [[ -f "${SCRIPT_DIR}/configs/setup.cfg" ]]; then
+if [[ -d "${SCRIPT_DIR}/configs" ]]; then
   REPO_DIR="${SCRIPT_DIR}"
 else
   if [[ -d "${REPO_DIR}/.git" ]]; then
@@ -126,18 +126,52 @@ else
   fi
 fi
 
-SRC_SETUP_CFG="${REPO_DIR}/configs/setup.cfg"
-if [[ ! -f "${SRC_SETUP_CFG}" ]]; then
-  echo "Missing file in repo: ${SRC_SETUP_CFG}" >&2
+SRC_DIR="${REPO_DIR}/configs"
+if [[ ! -d "${SRC_DIR}" ]]; then
+  echo "Missing directory in repo: ${SRC_DIR}" >&2
   exit 1
 fi
 
-if [[ -f "${TARGET_SETUP_CFG}" ]]; then
-  cp -a "${TARGET_SETUP_CFG}" "${TARGET_SETUP_CFG}.bak-$(timestamp)"
-fi
+deploy_file() {
+  local src="$1"
+  local dst="$2"
+  mkdir -p "$(dirname "$dst")"
+  cp -a "$src" "$dst"
+  chown "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
+}
 
-cp -a "${SRC_SETUP_CFG}" "${TARGET_SETUP_CFG}"
-chown "${USER_NAME}:${USER_NAME}" "${TARGET_SETUP_CFG}" 2>/dev/null || true
+require_file() {
+  local f="$1"
+  if [[ ! -f "${SRC_DIR}/${f}" ]]; then
+    echo "Missing file in repo: ${SRC_DIR}/${f}" >&2
+    exit 1
+  fi
+}
+
+# Files to deploy to <printer_data>/config (root)
+ROOT_FILES=(
+  "printer.cfg"
+  "crowsnest.conf"
+  "mainsail.cfg"
+  "KlipperScreen.conf"
+  "moonraker.conf"
+)
+
+# Files to deploy to <printer_data>/config/Configs
+CONFIGS_FILES=(
+  "macros.cfg"
+  "setup.cfg"
+)
+
+for f in "${ROOT_FILES[@]}"; do
+  require_file "$f"
+  deploy_file "${SRC_DIR}/${f}" "${CONFIG_ROOT}/${f}"
+done
+
+for f in "${CONFIGS_FILES[@]}"; do
+  require_file "$f"
+  deploy_file "${SRC_DIR}/${f}" "${TARGET_CONFIGS_DIR}/${f}"
+done
 
 # ------------------------------------------------------------
 # Step 3: Cleanup and USB service reset
@@ -155,7 +189,6 @@ while read -r dev on target type fstype rest; do
   fi
 done < <(mount | awk '{print $1, $2, $3, $4, $5, $6}')
 
-# Delete everything under gcodes except USB (directory names only)
 find "$GCODE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "USB" -exec rm -rf {} + 2>/dev/null || true
 find "$GCODE_ROOT" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} + 2>/dev/null || true
 rm -f "$USB_DIR"/* 2>/dev/null || true
@@ -191,7 +224,6 @@ mount_usb() {
   if mountpoint -q "\$MOUNT_POINT"; then
     return 0
   fi
-  # Read-only mount for safety
   mount -o ro,uid=\$UID_NUM,gid=\$GID_NUM,umask=022 "\$DEV" "\$MOUNT_POINT"
 }
 
@@ -231,7 +263,6 @@ EOF
 )
 write_file_sudo "/etc/systemd/system/usb-gcode@.service" "$USB_SERVICE_CONTENT"
 
-# Use two explicit rules (more reliable than "vfat|exfat" matching)
 UDEV_RULES_CONTENT=$(cat <<'EOF'
 ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="vfat",  TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
 ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="exfat", TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
@@ -257,6 +288,7 @@ echo "Debug:"
 echo "  mount | grep \"${MOUNT_POINT}\""
 echo "  systemctl status usb-gcode@sda1.service"
 echo
-echo "Config deployed:"
-echo "  ${TARGET_SETUP_CFG}"
+echo "Config deployed to:"
+echo "  ${CONFIG_ROOT}/ (printer.cfg, mainsail.cfg, crowsnest.conf, KlipperScreen.conf, moonraker.conf)"
+echo "  ${TARGET_CONFIGS_DIR}/ (macros.cfg, setup.cfg)"
 echo
