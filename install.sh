@@ -16,6 +16,10 @@ set -euo pipefail
 #         * all others            -> <printer_data>/config/
 #     - Backups are stored in <printer_data>/config/Backup/
 #       and created only if destination existed and differed.
+#     - Best-effort MCU serial injection into printer.cfg:
+#         * _MCU_SERIAL_ -> /dev/serial/by-id/usb-Klipper_* (prefer stm32h723xx)
+#         * _MCU_CONTROL_BOARD_SERIAL_ -> /dev/serial/by-id/usb-1a86_*
+#       If not detectable or ambiguous, placeholders are kept (no error).
 #  3) Restart:
 #     - If any config file changed, restart related services at the end.
 # ------------------------------------------------------------
@@ -73,6 +77,10 @@ need_cmd git
 need_cmd id
 need_cmd mountpoint
 need_cmd cmp
+need_cmd sed
+need_cmd readlink
+need_cmd mktemp
+need_cmd grep
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -168,6 +176,73 @@ deploy_file() {
   CONFIG_CHANGED=1
 }
 
+find_optional_one_by_glob() {
+  # Prints exactly one match if found uniquely; otherwise prints nothing and returns non-zero.
+  local pattern="$1"
+  local -a matches=()
+  local p
+
+  shopt -s nullglob
+  for p in $pattern; do
+    if [[ -e "$p" ]] && readlink -f "$p" >/dev/null 2>&1; then
+      matches+=("$p")
+    fi
+  done
+  shopt -u nullglob
+
+  if [[ "${#matches[@]}" -ne 1 ]]; then
+    return 1
+  fi
+
+  echo "${matches[0]}"
+  return 0
+}
+
+apply_printer_cfg_serials_best_effort() {
+  local printer_cfg_path="$1"
+
+  [[ -f "$printer_cfg_path" ]] || return 0
+  grep -q "_MCU_SERIAL_" "$printer_cfg_path" || return 0
+  grep -q "_MCU_CONTROL_BOARD_SERIAL_" "$printer_cfg_path" || return 0
+
+  local mcu_serial=""
+  local control_serial=""
+
+  # Prefer tight match for your main MCU; fallback to broader Klipper pattern if needed.
+  mcu_serial="$(find_optional_one_by_glob "/dev/serial/by-id/usb-Klipper_stm32h723xx_*" || true)"
+  if [[ -z "$mcu_serial" ]]; then
+    mcu_serial="$(find_optional_one_by_glob "/dev/serial/by-id/usb-Klipper_*" || true)"
+  fi
+
+  # Control board (CH340 / 1a86)
+  control_serial="$(find_optional_one_by_glob "/dev/serial/by-id/usb-1a86_*" || true)"
+
+  # Nothing detected: keep placeholders, no error.
+  if [[ -z "$mcu_serial" && -z "$control_serial" ]]; then
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  cp -a "$printer_cfg_path" "$tmp"
+
+  if [[ -n "$mcu_serial" ]]; then
+    sed -i "s|_MCU_SERIAL_|${mcu_serial}|g" "$tmp"
+  fi
+  if [[ -n "$control_serial" ]]; then
+    sed -i "s|_MCU_CONTROL_BOARD_SERIAL_|${control_serial}|g" "$tmp"
+  fi
+
+  if ! cmp -s "$tmp" "$printer_cfg_path"; then
+    cp -a "$printer_cfg_path" "${BACKUP_DIR}/printer.cfg.bak-$(timestamp)"
+    cp -a "$tmp" "$printer_cfg_path"
+    chown "${USER_NAME}:${USER_NAME}" "$printer_cfg_path" 2>/dev/null || true
+    CONFIG_CHANGED=1
+  fi
+
+  rm -f "$tmp"
+}
+
 ROOT_FILES=(
   "printer.cfg"
   "crowsnest.conf"
@@ -190,6 +265,8 @@ for f in "${CONFIGS_FILES[@]}"; do
   require_file "$f"
   deploy_file "${SRC_DIR}/${f}" "${TARGET_CONFIGS_DIR}/${f}"
 done
+
+apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 
 # ------------------------------------------------------------
 # Step 3: Cleanup and USB service reset
@@ -300,11 +377,8 @@ if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
   echo
   echo "Configuration changed. Restarting services..."
 
-  # Order matters: klipper first, then moonraker, then UI/camera services.
   sudo systemctl restart klipper 2>/dev/null || true
   sudo systemctl restart moonraker 2>/dev/null || true
-
-  # Optional services depending on installation
   sudo systemctl restart KlipperScreen 2>/dev/null || true
   sudo systemctl restart crowsnest 2>/dev/null || true
   sudo systemctl restart nginx 2>/dev/null || true
