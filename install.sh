@@ -2,24 +2,26 @@
 set -euo pipefail
 
 # ------------------------------------------------------------
-# Shaper Compact - USB Installer (USB-only)
-# Goals:
-#  - Auto-mount vfat/exfat USB drives on insert (udev + systemd)
-#  - Expose ONLY *.gcode files in: ~/printer_data/gcodes/USB  (uppercase)
-#  - Keep mount point technical: /media/usb (lowercase)
-#  - HARD cleanup (as requested):
-#      * delete every folder/file in ~/printer_data/gcodes/ except "USB"
-#      * do NOT touch USB stick contents (mounted read-only)
+# Shaper Compact - Installer
+# Features:
+#  1) USB G-code workflow:
+#     - Auto-mount vfat/exfat USB drives on insert (udev + systemd)
+#     - Expose ONLY *.gcode files in:  ~/printer_data/gcodes/USB
+#     - Use technical mount point:     /media/usb
+#     - Cleanup gcodes root: delete everything except "USB"
+#  2) Deploy config:
+#     - Pull shaper-compact repo (or use local repo if running inside it)
+#     - Copy configs/setup.cfg -> <printer_data>/config/Configs/setup.cfg
 # ------------------------------------------------------------
 
-LOG="/tmp/shaper-compact-usb-install.log"
+LOG="/tmp/shaper-compact-install.log"
 exec > >(tee -a "$LOG") 2>&1
 
 timestamp() { date +%Y%m%d-%H%M%S; }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
-    echo "❌ Missing command: $1"
+    echo "Missing command: $1" >&2
     exit 1
   }
 }
@@ -29,7 +31,6 @@ backup_file_sudo() {
   if sudo test -f "$f"; then
     local b="${f}.bak-$(timestamp)"
     sudo cp -a "$f" "$b"
-    echo "🗂️  Backup created: $b"
   fi
 }
 
@@ -41,16 +42,13 @@ write_file_sudo() {
   printf "%s" "$content" | sudo tee "$path" >/dev/null
 }
 
-echo "===================================="
-echo " Shaper Compact USB Installer"
-echo "===================================="
+echo "Shaper Compact Installer"
 echo "Log: $LOG"
-echo ""
+echo
 
-# Safety: do NOT run as root
+# Do not run as root
 if [[ "${EUID}" -eq 0 ]]; then
-  echo "❌ Do not run as root."
-  echo "Run as your normal user (e.g. velvet). This script will use sudo when needed."
+  echo "Do not run as root. Run as the normal user (e.g. velvet)." >&2
   exit 1
 fi
 
@@ -66,11 +64,9 @@ need_cmd find
 need_cmd mount
 need_cmd umount
 need_cmd awk
-
-echo "User:     $USER_NAME"
-echo "Home:     $HOME_DIR"
-echo "Hostname: $(hostname)"
-echo ""
+need_cmd git
+need_cmd id
+need_cmd mountpoint
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -79,97 +75,148 @@ if [[ -d "${HOME_DIR}/printer_data" ]]; then
 elif [[ -d "${HOME_DIR}/klipper_config" ]]; then
   PRINTER_DATA="${HOME_DIR}/klipper_config"
 else
-  echo "❌ Could not find printer_data in:"
-  echo "   - ${HOME_DIR}/printer_data"
-  echo "   - ${HOME_DIR}/klipper_config"
+  echo "Could not find printer_data directory under:" >&2
+  echo "  - ${HOME_DIR}/printer_data" >&2
+  echo "  - ${HOME_DIR}/klipper_config" >&2
   exit 1
 fi
 
 GCODE_ROOT="${PRINTER_DATA}/gcodes"
-USB_DIR="${GCODE_ROOT}/USB"          # FINAL user-visible folder (uppercase)
-MOUNT_POINT="/media/usb"             # Technical mount point (lowercase)
+USB_DIR="${GCODE_ROOT}/USB"
+MOUNT_POINT="/media/usb"
 
-echo "printer_data: $PRINTER_DATA"
-echo "gcodes root:  $GCODE_ROOT"
-echo "USB folder:   $USB_DIR"
-echo "mount point:  $MOUNT_POINT"
-echo ""
+CONFIG_ROOT="${PRINTER_DATA}/config"
+TARGET_CONFIGS_DIR="${CONFIG_ROOT}/Configs"
+TARGET_SETUP_CFG="${TARGET_CONFIGS_DIR}/setup.cfg"
 
-echo "[1/9] Ensure required directories exist..."
-mkdir -p "$GCODE_ROOT"
-mkdir -p "$USB_DIR"
+UID_NUM="$(id -u "${USER_NAME}")"
+GID_NUM="$(id -g "${USER_NAME}")"
+
+# ------------------------------------------------------------
+# Step 1: Ensure directories
+# ------------------------------------------------------------
+echo "[1/5] Preparing directories..."
+mkdir -p "$GCODE_ROOT" "$USB_DIR"
+mkdir -p "$TARGET_CONFIGS_DIR"
 sudo mkdir -p "$MOUNT_POINT"
 
-echo "[2/9] Stop any running USB services (cleanup)..."
+# ------------------------------------------------------------
+# Step 2: Sync repo and deploy setup.cfg
+# ------------------------------------------------------------
+echo "[2/5] Syncing repository and deploying setup.cfg..."
+
+REPO_URL="https://github.com/johnconnor-1985/shaper-compact.git"
+REPO_BRANCH="main"
+DEFAULT_REPO_DIR="${HOME_DIR}/shaper-compact"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$DEFAULT_REPO_DIR"
+
+# Prefer local repo if script is executed from within shaper-compact
+if [[ -f "${SCRIPT_DIR}/configs/setup.cfg" ]]; then
+  REPO_DIR="${SCRIPT_DIR}"
+else
+  if [[ -d "${REPO_DIR}/.git" ]]; then
+    git -C "${REPO_DIR}" fetch --all --prune
+    git -C "${REPO_DIR}" checkout "${REPO_BRANCH}" >/dev/null 2>&1 || true
+    git -C "${REPO_DIR}" pull --ff-only
+  else
+    rm -rf "${REPO_DIR}" 2>/dev/null || true
+    git clone --branch "${REPO_BRANCH}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
+  fi
+fi
+
+SRC_SETUP_CFG="${REPO_DIR}/configs/setup.cfg"
+if [[ ! -f "${SRC_SETUP_CFG}" ]]; then
+  echo "Missing file in repo: ${SRC_SETUP_CFG}" >&2
+  exit 1
+fi
+
+if [[ -f "${TARGET_SETUP_CFG}" ]]; then
+  cp -a "${TARGET_SETUP_CFG}" "${TARGET_SETUP_CFG}.bak-$(timestamp)"
+fi
+
+cp -a "${SRC_SETUP_CFG}" "${TARGET_SETUP_CFG}"
+chown "${USER_NAME}:${USER_NAME}" "${TARGET_SETUP_CFG}" 2>/dev/null || true
+
+# ------------------------------------------------------------
+# Step 3: Cleanup and USB service reset
+# ------------------------------------------------------------
+echo "[3/5] Cleaning gcodes root and resetting USB services..."
+
 sudo systemctl stop "usb-gcode@*.service" 2>/dev/null || true
 sudo systemctl reset-failed 2>/dev/null || true
 
-echo "[3/9] Unmount stale mounts (if any)..."
-# Unmount anything mounted at /media/usb
 sudo umount "$MOUNT_POINT" 2>/dev/null || true
 
-# Unmount anything mounted somewhere under gcodes root (legacy mistakes)
-# We parse mount output and unmount targets inside GCODE_ROOT
 while read -r dev on target type fstype rest; do
   if [[ "$target" == "$GCODE_ROOT"* ]]; then
-    echo "⚠️  Unmounting legacy mount inside gcodes: $target"
     sudo umount "$target" 2>/dev/null || true
   fi
 done < <(mount | awk '{print $1, $2, $3, $4, $5, $6}')
 
-echo "[4/9] HARD cleanup: remove everything under gcodes except 'USB'..."
-# Remove folders except USB
+# Delete everything under gcodes except USB (directory names only)
 find "$GCODE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "USB" -exec rm -rf {} + 2>/dev/null || true
-# Remove stray files directly under gcodes
 find "$GCODE_ROOT" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} + 2>/dev/null || true
-
-# Ensure final USB folder exists and is empty
-mkdir -p "$USB_DIR"
 rm -f "$USB_DIR"/* 2>/dev/null || true
 
-echo "[5/9] Install exFAT support (if missing)..."
+# ------------------------------------------------------------
+# Step 4: Ensure exFAT support
+# ------------------------------------------------------------
+echo "[4/5] Installing exFAT support..."
 sudo apt update
 sudo apt install -y exfat-fuse exfatprogs
 
-echo "[6/9] Install/Update usb-gcode handler script..."
-USB_GCODE_SH_CONTENT=$(cat <<EOF
-#!/bin/bash
-set -e
+# ------------------------------------------------------------
+# Step 5: Install usb-gcode handler + systemd + udev
+# ------------------------------------------------------------
+echo "[5/5] Installing USB handler, systemd unit, and udev rules..."
 
-ACTION=\$1
-DEV=\$2
+USB_GCODE_SH_CONTENT=$(cat <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+ACTION="\${1:-}"
+DEV="\${2:-}"
 
 MOUNT_POINT="${MOUNT_POINT}"
 KLIPPER_DIR="${USB_DIR}"
 
-# detect fs type (vfat/exfat)
+UID_NUM=${UID_NUM}
+GID_NUM=${GID_NUM}
+
 FSTYPE=\$(blkid -o value -s TYPE "\$DEV" 2>/dev/null || true)
 
-if [ "\$ACTION" = "add" ]; then
-  if [ "\$FSTYPE" = "vfat" ] || [ "\$FSTYPE" = "exfat" ]; then
-    # mount read-only for safety
-    mount -o ro,uid=${USER_NAME},gid=${USER_NAME},umask=000 "\$DEV" "\$MOUNT_POINT"
-
-    # Clean user-visible folder (files only)
-    rm -f "\$KLIPPER_DIR"/*
-
-    # Link ONLY *.gcode from the root of the USB drive
-    find "\$MOUNT_POINT" -maxdepth 1 -type f -iname "*.gcode" \\
-      -exec ln -s {} "\$KLIPPER_DIR"/ \\;
+mount_usb() {
+  if mountpoint -q "\$MOUNT_POINT"; then
+    return 0
   fi
-fi
+  # Read-only mount for safety
+  mount -o ro,uid=\$UID_NUM,gid=\$GID_NUM,umask=022 "\$DEV" "\$MOUNT_POINT"
+}
 
-if [ "\$ACTION" = "remove" ]; then
-  rm -f "\$KLIPPER_DIR"/*
-  umount "\$MOUNT_POINT" 2>/dev/null || true
-fi
+case "\$ACTION" in
+  add)
+    if [[ "\$FSTYPE" == "vfat" || "\$FSTYPE" == "exfat" ]]; then
+      mount_usb
+      rm -f "\$KLIPPER_DIR"/* 2>/dev/null || true
+      find "\$MOUNT_POINT" -maxdepth 1 -type f -iname "*.gcode" -exec ln -s {} "\$KLIPPER_DIR"/ \\; 2>/dev/null || true
+    fi
+    ;;
+  remove)
+    rm -f "\$KLIPPER_DIR"/* 2>/dev/null || true
+    umount "\$MOUNT_POINT" 2>/dev/null || true
+    ;;
+  *)
+    exit 0
+    ;;
+esac
 EOF
 )
 
 write_file_sudo "/usr/local/bin/usb-gcode.sh" "$USB_GCODE_SH_CONTENT"
 sudo chmod +x /usr/local/bin/usb-gcode.sh
 
-echo "[7/9] Install/Update systemd service + udev rule..."
 USB_SERVICE_CONTENT=$(cat <<'EOF'
 [Unit]
 Description=USB Gcode automount (%i)
@@ -184,26 +231,32 @@ EOF
 )
 write_file_sudo "/etc/systemd/system/usb-gcode@.service" "$USB_SERVICE_CONTENT"
 
-UDEV_RULE='ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="vfat|exfat", TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"'
-write_file_sudo "/etc/udev/rules.d/99-usb-gcode.rules" "${UDEV_RULE}"$'\n'
+# Use two explicit rules (more reliable than "vfat|exfat" matching)
+UDEV_RULES_CONTENT=$(cat <<'EOF'
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="vfat",  TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="exfat", TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
+EOF
+)
+write_file_sudo "/etc/udev/rules.d/99-usb-gcode.rules" "${UDEV_RULES_CONTENT}"$'\n'
 
-echo "[8/9] Reload systemd + udev..."
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
-echo "[9/9] Done."
-echo ""
-echo "✅ USB installer completed successfully."
-echo ""
-echo "TEST:"
-echo "  1) Insert a FAT32 or exFAT USB stick with *.gcode files in the ROOT"
-echo "  2) Wait 2–3 seconds"
-echo "  3) Run:"
+echo
+echo "Installation completed."
+echo
+echo "USB test:"
+echo "  1) Insert a FAT32 or exFAT USB drive with *.gcode files in the root directory"
+echo "  2) Wait a few seconds"
+echo "  3) Check:"
 echo "     ls -la \"${USB_DIR}\""
-echo ""
+echo
 echo "Debug:"
 echo "  mount | grep \"${MOUNT_POINT}\""
 echo "  systemctl status usb-gcode@sda1.service"
-echo ""
+echo
+echo "Config deployed:"
+echo "  ${TARGET_SETUP_CFG}"
+echo
