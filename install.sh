@@ -14,8 +14,10 @@ set -euo pipefail
 #     - Copy files from repo ./configs to Klipper config directories:
 #         * macros.cfg, setup.cfg -> <printer_data>/config/Configs/
 #         * all others            -> <printer_data>/config/
-#     - Create backups only if destination existed and differed:
-#         * backups are stored in <printer_data>/config/Backup/
+#     - Backups are stored in <printer_data>/config/Backup/
+#       and created only if destination existed and differed.
+#  3) Restart:
+#     - If any config file changed, restart related services at the end.
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -96,6 +98,8 @@ BACKUP_DIR="${CONFIG_ROOT}/Backup"
 UID_NUM="$(id -u "${USER_NAME}")"
 GID_NUM="$(id -g "${USER_NAME}")"
 
+CONFIG_CHANGED=0
+
 # ------------------------------------------------------------
 # Step 1: Ensure directories
 # ------------------------------------------------------------
@@ -116,7 +120,6 @@ DEFAULT_REPO_DIR="${HOME_DIR}/shaper-compact"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$DEFAULT_REPO_DIR"
 
-# Prefer local repo if script is executed from within shaper-compact
 if [[ -d "${SCRIPT_DIR}/configs" ]]; then
   REPO_DIR="${SCRIPT_DIR}"
 else
@@ -152,21 +155,19 @@ deploy_file() {
 
   mkdir -p "$(dirname "$dst")"
 
-  # Destination exists and is identical: do nothing
   if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
     return 0
   fi
 
-  # Destination exists and differs: backup
   if [[ -f "$dst" ]]; then
     cp -a "$dst" "${BACKUP_DIR}/${name}.bak-$(timestamp)"
   fi
 
   cp -a "$src" "$dst"
   chown "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
+  CONFIG_CHANGED=1
 }
 
-# Files to deploy to <printer_data>/config (root)
 ROOT_FILES=(
   "printer.cfg"
   "crowsnest.conf"
@@ -175,7 +176,6 @@ ROOT_FILES=(
   "moonraker.conf"
 )
 
-# Files to deploy to <printer_data>/config/Configs
 CONFIGS_FILES=(
   "macros.cfg"
   "setup.cfg"
@@ -292,6 +292,23 @@ sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo udevadm control --reload-rules
 sudo udevadm trigger
+
+# ------------------------------------------------------------
+# Restart services if configuration changed
+# ------------------------------------------------------------
+if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
+  echo
+  echo "Configuration changed. Restarting services..."
+
+  # Order matters: klipper first, then moonraker, then UI/camera services.
+  sudo systemctl restart klipper 2>/dev/null || true
+  sudo systemctl restart moonraker 2>/dev/null || true
+
+  # Optional services depending on installation
+  sudo systemctl restart KlipperScreen 2>/dev/null || true
+  sudo systemctl restart crowsnest 2>/dev/null || true
+  sudo systemctl restart nginx 2>/dev/null || true
+fi
 
 echo
 echo "Installation completed."
