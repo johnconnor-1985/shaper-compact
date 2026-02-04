@@ -20,7 +20,9 @@ set -euo pipefail
 #         * _MCU_SERIAL_ -> /dev/serial/by-id/usb-Klipper_* (prefer stm32h723xx)
 #         * _MCU_CONTROL_BOARD_SERIAL_ -> /dev/serial/by-id/usb-1a86_*
 #       If not detectable or ambiguous, placeholders are kept (no error).
-#  3) Restart:
+#  3) Service hygiene:
+#     - crowsnest is configured to not be considered failed when no camera is attached.
+#  4) Restart:
 #     - If any config file changed, restart related services at the end.
 # ------------------------------------------------------------
 
@@ -81,6 +83,7 @@ need_cmd sed
 need_cmd readlink
 need_cmd mktemp
 need_cmd grep
+need_cmd mkdir
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -111,7 +114,7 @@ CONFIG_CHANGED=0
 # ------------------------------------------------------------
 # Step 1: Ensure directories
 # ------------------------------------------------------------
-echo "[1/5] Preparing directories..."
+echo "[1/6] Preparing directories..."
 mkdir -p "$GCODE_ROOT" "$USB_DIR"
 mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
 sudo mkdir -p "$MOUNT_POINT"
@@ -119,7 +122,7 @@ sudo mkdir -p "$MOUNT_POINT"
 # ------------------------------------------------------------
 # Step 2: Sync repo and deploy config files
 # ------------------------------------------------------------
-echo "[2/5] Syncing repository and deploying configuration..."
+echo "[2/6] Syncing repository and deploying configuration..."
 
 REPO_URL="https://github.com/johnconnor-1985/shaper-compact.git"
 REPO_BRANCH="main"
@@ -177,7 +180,6 @@ deploy_file() {
 }
 
 find_optional_one_by_glob() {
-  # Prints exactly one match if found uniquely; otherwise prints nothing and returns non-zero.
   local pattern="$1"
   local -a matches=()
   local p
@@ -208,16 +210,13 @@ apply_printer_cfg_serials_best_effort() {
   local mcu_serial=""
   local control_serial=""
 
-  # Prefer tight match for your main MCU; fallback to broader Klipper pattern if needed.
   mcu_serial="$(find_optional_one_by_glob "/dev/serial/by-id/usb-Klipper_stm32h723xx_*" || true)"
   if [[ -z "$mcu_serial" ]]; then
     mcu_serial="$(find_optional_one_by_glob "/dev/serial/by-id/usb-Klipper_*" || true)"
   fi
 
-  # Control board (CH340 / 1a86)
   control_serial="$(find_optional_one_by_glob "/dev/serial/by-id/usb-1a86_*" || true)"
 
-  # Nothing detected: keep placeholders, no error.
   if [[ -z "$mcu_serial" && -z "$control_serial" ]]; then
     return 0
   fi
@@ -271,7 +270,7 @@ apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 # ------------------------------------------------------------
 # Step 3: Cleanup and USB service reset
 # ------------------------------------------------------------
-echo "[3/5] Cleaning gcodes root and resetting USB services..."
+echo "[3/6] Cleaning gcodes root and resetting USB services..."
 
 sudo systemctl stop "usb-gcode@*.service" 2>/dev/null || true
 sudo systemctl reset-failed 2>/dev/null || true
@@ -291,14 +290,14 @@ rm -f "$USB_DIR"/* 2>/dev/null || true
 # ------------------------------------------------------------
 # Step 4: Ensure exFAT support
 # ------------------------------------------------------------
-echo "[4/5] Installing exFAT support..."
+echo "[4/6] Installing exFAT support..."
 sudo apt-get update
 sudo apt-get install -y exfat-fuse exfatprogs
 
 # ------------------------------------------------------------
 # Step 5: Install usb-gcode handler + systemd + udev
 # ------------------------------------------------------------
-echo "[5/5] Installing USB handler, systemd unit, and udev rules..."
+echo "[5/6] Installing USB handler, systemd unit, and udev rules..."
 
 USB_GCODE_SH_CONTENT=$(cat <<EOF
 #!/usr/bin/env bash
@@ -358,9 +357,10 @@ EOF
 )
 write_file_sudo "/etc/systemd/system/usb-gcode@.service" "$USB_SERVICE_CONTENT"
 
+# Trigger only on USB block devices (prevents matching the SD-card boot partition mmcblk0p1).
 UDEV_RULES_CONTENT=$(cat <<'EOF'
-ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="vfat",  TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
-ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="exfat", TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="vfat",  TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="exfat", TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
 EOF
 )
 write_file_sudo "/etc/udev/rules.d/99-usb-gcode.rules" "${UDEV_RULES_CONTENT}"$'\n'
