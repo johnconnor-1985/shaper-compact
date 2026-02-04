@@ -14,6 +14,8 @@ set -euo pipefail
 #     - Copy files from repo ./configs to Klipper config directories:
 #         * macros.cfg, setup.cfg -> <printer_data>/config/Configs/
 #         * all others            -> <printer_data>/config/
+#     - Create backups only if destination existed and differed:
+#         * backups are stored in <printer_data>/config/Backup/
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -68,6 +70,7 @@ need_cmd awk
 need_cmd git
 need_cmd id
 need_cmd mountpoint
+need_cmd cmp
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -88,6 +91,7 @@ MOUNT_POINT="/media/usb"
 
 CONFIG_ROOT="${PRINTER_DATA}/config"
 TARGET_CONFIGS_DIR="${CONFIG_ROOT}/Configs"
+BACKUP_DIR="${CONFIG_ROOT}/Backup"
 
 UID_NUM="$(id -u "${USER_NAME}")"
 GID_NUM="$(id -g "${USER_NAME}")"
@@ -97,7 +101,7 @@ GID_NUM="$(id -g "${USER_NAME}")"
 # ------------------------------------------------------------
 echo "[1/5] Preparing directories..."
 mkdir -p "$GCODE_ROOT" "$USB_DIR"
-mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR"
+mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
 sudo mkdir -p "$MOUNT_POINT"
 
 # ------------------------------------------------------------
@@ -132,20 +136,34 @@ if [[ ! -d "${SRC_DIR}" ]]; then
   exit 1
 fi
 
-deploy_file() {
-  local src="$1"
-  local dst="$2"
-  mkdir -p "$(dirname "$dst")"
-  cp -a "$src" "$dst"
-  chown "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
-}
-
 require_file() {
   local f="$1"
   if [[ ! -f "${SRC_DIR}/${f}" ]]; then
     echo "Missing file in repo: ${SRC_DIR}/${f}" >&2
     exit 1
   fi
+}
+
+deploy_file() {
+  local src="$1"
+  local dst="$2"
+  local name
+  name="$(basename "$dst")"
+
+  mkdir -p "$(dirname "$dst")"
+
+  # Destination exists and is identical: do nothing
+  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+    return 0
+  fi
+
+  # Destination exists and differs: backup
+  if [[ -f "$dst" ]]; then
+    cp -a "$dst" "${BACKUP_DIR}/${name}.bak-$(timestamp)"
+  fi
+
+  cp -a "$src" "$dst"
+  chown "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
 }
 
 # Files to deploy to <printer_data>/config (root)
@@ -291,4 +309,6 @@ echo
 echo "Config deployed to:"
 echo "  ${CONFIG_ROOT}/ (printer.cfg, mainsail.cfg, crowsnest.conf, KlipperScreen.conf, moonraker.conf)"
 echo "  ${TARGET_CONFIGS_DIR}/ (macros.cfg, setup.cfg)"
+echo "Backups (only when changed):"
+echo "  ${BACKUP_DIR}/"
 echo
