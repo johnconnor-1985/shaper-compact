@@ -4,7 +4,7 @@ These files are copied in `~/printer_data/config/` by the installer.
 - printer.cfg
 - macros.cfg
 - setup.cfg
-- crwosnest.conf
+- crowsnest.conf
 - mainsail.cfg
 - KlipperScreen.conf
 - moonraker.conf
