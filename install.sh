@@ -245,6 +245,8 @@ else
   fi
 fi
 
+git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
+
 SRC_DIR="${REPO_DIR}/configs"
 if [[ ! -d "${SRC_DIR}" ]]; then
   echo "Missing directory in repo: ${SRC_DIR}" >&2
