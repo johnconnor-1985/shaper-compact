@@ -1,48 +1,244 @@
-/* Custom theme from KlipperScreen.com | 05 Feb 2026 */
-*{color: #d19dff;}
-window{background-color: #000000;}
-button{background-color: #000000;}
-button:active{background-color: #222222;}
-.button_active{background-color: #222222; border-radius: 1em;}
-button.color1{border-bottom-color: #a53eff; border-bottom-width: 2px;}
-button.color2{border-bottom-color: #a53eff;  border-bottom-width: 2px;}
-button.color3{border-bottom-color: #a53eff; border-bottom-width: 2px;}
-button.color4{border-bottom-color: #a53eff; border-bottom-width: 2px;}
-button.active{background-color: #20303D;}
-button.update{background: #009384; border-color: #009384;}
-button.invalid{background: #e61e1e; border-color: #e61e1e;}
-combobox box button{border-color: #a53eff;}
-switch{background-color: #222222;}
-switch:checked{background-color: #a53eff;}
-entry{background-color: #222222; border-color: #000000;}
-label{color: #d19dff;}
-menu{background-color: #000000; border-color: #a53eff;}
-menuitem{background-color: #000000; border-color: #a53eff;}
-trough{background-color: #a53eff; color: #d19dff; border-color: #000000;}
-trough highlight, trough progress{background-color: #d19dff; color: #d19dff; border-color: #000000;}
-scale-mark{color: #d19dff;}
-scrollbar, scrollbar button, scrollbar trough{background-color: #000000;}
-scrollbar slider{ background-color: #a53eff;}
-textview .time{color: #d19dff;}
-.popup{background-color: #000000;}
-.dialog{border: #000000; background-color: #000000;}
-.dialog button{border-bottom-color: #009384;}
-.dialog button:nth-child(1){border-bottom-color: #A7E100;}
-.dialog button:nth-child(2){border-bottom-color: #cc1e1e;}
-.distbutton_active{background-color: #20303D;}
-.distbutton_top{border-color: #a53eff;}
-.distbutton{border-color: #a53eff; border-left-color: #a53eff;}
-.distbutton_bottom{border-color: #a53eff; border-left-color: #a53eff;}
-.fan_slider{color: #d19dff;}
-.message_popup{border-bottom-color: #a53eff;}
-.numpad_tleft, .numpad_top, .numpad_tright, .numpad_left, .numpad_button, .numpad_right, .numpad_bleft, .numpad_bottom, .numpad_bright{border-color: #a53eff;}
-.printing-status{color: #d19dff;}
-.printing-progress-text{color: #d19dff;}
-.printing-status-label{color: #d19dff;}
-.tempbutton_top{border-color: #a53eff;}
-.tempbutton, .tempbutton_bottom{border-color: #a53eff; border-top-color: #a53eff;}
-.message{border-color: #981E1F; color: #d19dff; background-color: #981E1F;}
-.message button{background-color: #d19dff; color: #000000;}
-.warning{background-color: rgba(30, 204, 39, 0.7);}
-.error{background-color: rgba(204, 30, 30, 0.7);}
-.keyboard_pad{background-color: #000000;}
+/* blurry-theme created by Sascha Buerger 2023 */
+@define-color color1 #f9a825;
+@define-color color2 #d33682;
+@define-color color3 #2aa198;
+@define-color color4 #859900;
+@define-color bg #002b36;
+@define-color warning #f9a825;
+@define-color error #981E1F;
+@define-color text white;
+
+* {
+    background-color: transparent;
+
+}
+
+list row {
+    background-color: rgba(2, 27, 56, 0.526);
+    border-top-left-radius: 1em;
+    border-top-right-radius: 1em;
+}
+
+treeview.view {
+    background-color: transparent;
+
+}
+
+window {
+    background-color: @bg;
+    background-image: url("./styles/blurry2/background.png");
+    background-size: cover;
+
+}
+
+button {
+    background-color: transparent;
+    border-radius: 0.5em;
+}
+
+button:active,
+.button_active,
+button.active {
+    background-color: rgba(2, 27, 56, 0.575);
+    border-radius: 0.5em;
+    border-style: none;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+
+button.color1 {
+    background-color: rgba(2, 27, 56, 0.3);
+    border-bottom-color: @color1;
+    border-radius: 1em;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+
+button.color2 {
+    background-color: rgba(2, 27, 56, 0.3);
+    border-bottom-color: @color2;
+    border-radius: 1em;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+
+button.color3 {
+    background-color: rgba(2, 27, 56, 0.3);
+    border-bottom-color: @color3;
+    border-radius: 1em;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+
+button.color4 {
+    background-color: rgba(2, 27, 56, 0.3);
+    border-bottom-color: @color4;
+    border-radius: 1em;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+
+button.update {
+    background-color: rgba(2, 27, 56, 0.3);
+    border: 0;
+    border-bottom: .3em solid;
+    border-bottom-color: @color4;
+    border-radius: .75em;
+}
+
+button.invalid {
+    background-color: rgba(2, 27, 56, 0.3);
+    border: 0;
+    border-bottom: .3em solid;
+    border-bottom-color: @error;
+    border-radius: .75em;
+}
+
+combobox button,
+combobox box button {
+    background-color: rgba(23, 23, 23, 0.2);
+    border-color: transparent;
+    border: 0;
+    border-radius: 0.75em;
+}
+
+menu,
+popover,
+popover button,
+combobox arrow,
+menuitem,
+combobox menuitem {
+    background-color: transparent;
+    
+}
+
+combobox window.popup {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+treeview.view check,
+switch {
+    background-color: rgba(2, 27, 56, 0.3);
+}
+
+treeview.view check:checked,
+switch:checked {
+    background-color: @color4;
+}
+
+entry {
+    background-color: rgba(2, 27, 56, 0.4);
+    border: none;
+    margin-bottom: 0.5em;
+    box-shadow: inset 0px 0px 32px 18px rgba(0,0,0,0.32);
+}
+
+menu {
+    background-color: transparent; 
+    border: 0.2em solid;
+    border-color: @bg;
+    border-radius: 0.5em;
+}
+
+menuitem {
+    background-color: transparent;
+    border: none;
+    
+}
+
+trough {
+    background-color: rgba(2, 27, 56, 0.3);
+    color: @text;
+    border: none;
+    border-radius: 1em;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+
+trough highlight,
+trough progress {
+    background-color: rgba(227, 115, 2, 0.65);
+    border: none;
+    border-top-left-radius: 1em;
+    border-bottom-left-radius: 1em;
+    box-shadow: inset 0px 0px 22px 5px rgba(0,0,0,0.32);
+}
+trough progress.left {
+    border: 2px;
+}
+
+scrollbar, scrollbar button, scrollbar trough {
+    background-color: transparent;
+}
+
+scrollbar slider {
+    background-color: rgba(217, 217, 217, 0.526);
+}
+
+.popup {
+    background-color: @color3;
+}
+
+.dialog {
+    border: @bg;
+    background-color: transparent;
+}
+
+.dialog button {
+    background-color: rgba(2, 27, 56, 0.3);
+    border-bottom-color: @color3;
+    border-radius: .75em;
+}
+
+.dialog button:nth-child(1) {
+    border-bottom-color: @color4;
+}
+
+.dialog button:nth-child(2) {
+    border-bottom-color: @error;
+}
+
+.horizontal_togglebuttons {
+    border: none;
+    background-color: rgba(2, 27, 56, 0.3);
+    border-radius: 0.75em;
+    margin-right: 5px;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+
+.horizontal_togglebuttons_active {
+    background-color: rgba(227, 115, 2, 0.65);
+    box-shadow: inset 0px 0px 22px 5px rgba(0,0,0,0.32);
+}
+
+.numpad_tleft,
+.numpad_top,
+.numpad_tright,
+.numpad_left,
+.numpad_button,
+.numpad_right,
+.numpad_bleft,
+.numpad_bottom,
+.numpad_bright {
+    border-color: transparent;
+    background-color: rgba(2, 27, 56, 0.3);
+    margin-right: 0.25em;
+    margin-left: 0.25em;
+    margin-bottom: 0.5em;
+}
+
+.message button {
+    color: @bg;
+}
+
+.warning {
+    background-color: @color1;
+}
+
+.keyboard_pad {
+    background-color: rgba(2, 27, 56, 0.5);
+    margin-right: 0.3em;
+    margin-bottom: 0.3em;
+    box-shadow: inset 0px 0px 15px -4px rgba(0,0,0,0.24);
+}
+.graph_label {
+    background-color: rgba(2, 27, 56, 0.3);
+    border-left-width: 4px; 
+    border-left-style: solid;
+    border-radius: 6px;
+}
