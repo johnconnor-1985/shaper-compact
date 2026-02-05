@@ -27,7 +27,10 @@ set -euo pipefail
 #     - Install systemd oneshot service "shaper_compact" that runs update.sh
 #     - Add "shaper_compact" to Moonraker allowed services:
 #         * /home/velvet/printer_data/moonraker.asvc
-#  4) Restart:
+#  4) Mainsail theme deployment:
+#     - Copy repo ./configs/Mainsail/* to <printer_data>/config/.theme/
+#     - No backups for .theme; existing contents are replaced.
+#  5) Restart:
 #     - If any config file changed, restart related services at the end.
 # ------------------------------------------------------------
 
@@ -92,6 +95,8 @@ need_cmd chmod
 need_cmd cat
 need_cmd sort
 need_cmd uniq
+need_cmd rm
+need_cmd cp
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -113,6 +118,7 @@ MOUNT_POINT="/media/usb"
 CONFIG_ROOT="${PRINTER_DATA}/config"
 TARGET_CONFIGS_DIR="${CONFIG_ROOT}/Configs"
 BACKUP_DIR="${CONFIG_ROOT}/Backup"
+THEME_DIR="${CONFIG_ROOT}/.theme"
 
 # IMPORTANT: on your system Moonraker reads allowlist here (not under config/)
 MOONRAKER_ASVC="${PRINTER_DATA}/moonraker.asvc"
@@ -193,7 +199,6 @@ ensure_moonraker_allowed_service() {
   } | sed '/^[[:space:]]*$/d' | sort | uniq > "${tmp}.new"
 
   if [[ -f "$MOONRAKER_ASVC" ]] && cmp -s "${tmp}.new" "$MOONRAKER_ASVC"; then
-    # Ensure lock-down even if already correct
     sudo chown root:root "$MOONRAKER_ASVC" 2>/dev/null || true
     sudo chmod 444 "$MOONRAKER_ASVC" 2>/dev/null || true
     rm -f "$tmp" "${tmp}.new"
@@ -210,6 +215,27 @@ ensure_moonraker_allowed_service() {
   CONFIG_CHANGED=1
 
   rm -f "$tmp" "${tmp}.new"
+}
+
+deploy_mainsail_theme() {
+  # Copy repo configs/Mainsail/* -> <printer_data>/config/.theme/
+  # No backups. Existing contents are replaced.
+  local src_theme="${SRC_DIR}/Mainsail"
+
+  if [[ ! -d "$src_theme" ]]; then
+    return 0
+  fi
+
+  # If source is empty, do nothing
+  if ! find "$src_theme" -maxdepth 1 -type f 1>/dev/null 2>&1; then
+    return 0
+  fi
+
+  rm -rf "$THEME_DIR" 2>/dev/null || true
+  mkdir -p "$THEME_DIR"
+  cp -a "$src_theme"/. "$THEME_DIR"/
+  chown -R "${USER_NAME}:${USER_NAME}" "$THEME_DIR" 2>/dev/null || true
+  CONFIG_CHANGED=1
 }
 
 # ------------------------------------------------------------
@@ -380,6 +406,9 @@ done
 
 apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 
+# Deploy Mainsail theme (.theme) without backups (replace contents)
+deploy_mainsail_theme
+
 # ------------------------------------------------------------
 # Step 3: Moonraker update integration (update button -> update.sh)
 # ------------------------------------------------------------
@@ -517,6 +546,9 @@ echo
 echo "Update Manager integration:"
 echo "  - Systemd service installed: shaper_compact.service"
 echo "  - Moonraker allowlist updated: ${MOONRAKER_ASVC}"
+echo
+echo "Mainsail theme deployed to:"
+echo "  ${THEME_DIR}/ (replaced; no backups)"
 echo
 echo "Config deployed to:"
 echo "  ${CONFIG_ROOT}/ (printer.cfg, mainsail.cfg, crowsnest.conf, KlipperScreen.conf, moonraker.conf)"
