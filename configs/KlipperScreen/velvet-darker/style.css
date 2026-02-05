@@ -37,7 +37,7 @@ window {
 
 window {
     background-color: @bg;
-    background-image: url("./styles/velvet-darker/background_3.png");
+    background-image: url("./styles/velvet-darker/background.png");
     background-size: cover;
 
 }
