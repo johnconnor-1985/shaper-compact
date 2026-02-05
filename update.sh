@@ -499,15 +499,20 @@ git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
 echo
 echo "[4/4] Finalizing..."
 
+if [[ "$CHECK_ONLY" != "true" ]]; then
+    echo "Restarting KlipperScreen (UI refresh)..."
+    sudo systemctl restart KlipperScreen 2>/dev/null || true
+fi
+
 if [[ "$CHANGED" -eq 1 ]]; then
-  if [[ "$CHECK_ONLY" == "true" ]]; then
-    echo "Check-only mode: changes detected (no changes applied)."
-  else
-    echo "Changes applied. Restarting services..."
-    restart_services
-  fi
+    if [[ "$CHECK_ONLY" == "true" ]]; then
+        echo "Check-only mode: changes detected (no changes applied)."
+    else
+        echo "Changes applied. Restarting services..."
+        restart_services
+    fi
 else
-  echo "No changes detected."
+    echo "No changes detected."
 fi
 
 echo
