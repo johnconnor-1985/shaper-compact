@@ -1,7 +1,7 @@
 /* Custom theme from KlipperScreen.com | 05 Feb 2026 */
 *{color: #d19dff;}
-window{background-color: #3a0f6b;}
-button{background-color: #3a0f6b;}
+window{background-color: #000000;}
+button{background-color: #000000;}
 button:active{background-color: #222222;}
 .button_active{background-color: #222222; border-radius: 1em;}
 button.color1{border-bottom-color: #a53eff; border-bottom-width: 2px;}
@@ -16,16 +16,16 @@ switch{background-color: #222222;}
 switch:checked{background-color: #a53eff;}
 entry{background-color: #222222; border-color: #000000;}
 label{color: #d19dff;}
-menu{background-color: #3a0f6b; border-color: #a53eff;}
-menuitem{background-color: #3a0f6b; border-color: #a53eff;}
+menu{background-color: #000000; border-color: #a53eff;}
+menuitem{background-color: #000000; border-color: #a53eff;}
 trough{background-color: #a53eff; color: #d19dff; border-color: #000000;}
 trough highlight, trough progress{background-color: #d19dff; color: #d19dff; border-color: #000000;}
 scale-mark{color: #d19dff;}
-scrollbar, scrollbar button, scrollbar trough{background-color: #3a0f6b;}
+scrollbar, scrollbar button, scrollbar trough{background-color: #000000;}
 scrollbar slider{ background-color: #a53eff;}
 textview .time{color: #d19dff;}
-.popup{background-color: #3a0f6b;}
-.dialog{border: #3a0f6b; background-color: #3a0f6b;}
+.popup{background-color: #000000;}
+.dialog{border: #000000; background-color: #000000;}
 .dialog button{border-bottom-color: #009384;}
 .dialog button:nth-child(1){border-bottom-color: #A7E100;}
 .dialog button:nth-child(2){border-bottom-color: #cc1e1e;}
@@ -45,4 +45,4 @@ textview .time{color: #d19dff;}
 .message button{background-color: #d19dff; color: #000000;}
 .warning{background-color: rgba(30, 204, 39, 0.7);}
 .error{background-color: rgba(204, 30, 30, 0.7);}
-.keyboard_pad{background-color: #3a0f6b;}
+.keyboard_pad{background-color: #000000;}
