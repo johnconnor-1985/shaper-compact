@@ -384,6 +384,7 @@ apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 echo "[3/7] Installing shaper_compact service and Moonraker allowlist..."
 install_shaper_compact_service
 ensure_moonraker_allowed_service
+sudo rm -f "${CONFIG_ROOT}/moonraker.asvc" 2>/dev/null || true
 
 # ------------------------------------------------------------
 # Step 4: Cleanup and USB service reset
