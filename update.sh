@@ -17,6 +17,10 @@ set -euo pipefail
 #   - Configs/: macros.cfg, setup.cfg
 #   - NO printer.cfg deployment (kept local for customer customization)
 #
+# Deploys UI customizations (NO backup, hard replace):
+#   - Mainsail:      ./configs/Mainsail/* -> <printer_data>/config/.theme/
+#   - KlipperScreen: ./configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker
+#
 # Backups:
 #   - Only if destination existed and differed
 #   - Stored in: <printer_data>/config/Backup/
@@ -50,6 +54,9 @@ need_cmd sudo
 need_cmd systemctl
 need_cmd grep
 need_cmd readlink
+need_cmd rm
+need_cmd cp
+need_cmd mkdir
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
@@ -313,6 +320,55 @@ restart_services() {
   done
 }
 
+# -------------------------------
+# UI customization deployment
+# -------------------------------
+
+deploy_dir_replace() {
+  # Hard replace directory (no backups):
+  #   deploy_dir_replace <src_dir> <dst_dir> <label>
+  local src="$1"
+  local dst="$2"
+  local label="${3:-dir}"
+
+  if [[ ! -d "$src" ]]; then
+    echo "Skipping ${label}: missing source dir: $src"
+    return 0
+  fi
+
+  # ensure src has something
+  if ! find "$src" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+    echo "Skipping ${label}: source dir is empty: $src"
+    return 0
+  fi
+
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "Would replace ${label}: $dst (from $src)"
+    CHANGED=1
+    return 0
+  fi
+
+  rm -rf "$dst" 2>/dev/null || true
+  mkdir -p "$(dirname "$dst")"
+  cp -a "$src" "$dst"
+  chown -R "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
+  CHANGED=1
+  echo "Replaced ${label}: $dst"
+}
+
+deploy_ui_customizations() {
+  # Mainsail .theme
+  local mainsail_src="${CONFIGS_SRC_DIR}/Mainsail"
+  local mainsail_dst="${CONFIG_ROOT}/.theme"
+  deploy_dir_replace "$mainsail_src" "$mainsail_dst" "Mainsail theme (.theme)"
+
+  # KlipperScreen theme (velvet-darker)
+  local kscreen_src="${CONFIGS_SRC_DIR}/KlipperScreen/velvet-darker"
+  local kscreen_styles_dir="${KSCREEN_DIR:-/home/${USER_NAME}/KlipperScreen}/styles"
+  local kscreen_dst="${kscreen_styles_dir}/velvet-darker"
+  deploy_dir_replace "$kscreen_src" "$kscreen_dst" "KlipperScreen theme (velvet-darker)"
+}
+
 rollback() {
   # Restore configs (from backups created during this run) and git HEADs.
   if [[ "$ROLLBACK_IN_PROGRESS" -eq 1 ]]; then
@@ -340,6 +396,8 @@ rollback() {
   for dir in "${!PREV_HEAD[@]}"; do
     restore_git_state "$dir"
   done
+
+  # NOTE: UI custom dirs are "no backup"; rollback does not revert them.
 
   # Best-effort restart after rollback
   restart_services
@@ -385,7 +443,7 @@ fi
 system_best_effort_update
 
 # ------------------------------------------------------------
-# 2) Deploy configs (NO printer.cfg)
+# 2) Deploy configs (NO printer.cfg) + UI customizations
 # ------------------------------------------------------------
 echo
 echo "[2/4] Deploying configuration..."
@@ -421,6 +479,9 @@ for f in "${CONFIGS_FILES[@]}"; do
   dst="${TARGET_CONFIGS_DIR}/${f}"
   deploy_file "$src" "$dst"
 done
+
+# Deploy UI customizations (NO BACKUP, hard replace)
+deploy_ui_customizations
 
 # Allow Moonraker to manage shaper_compact service (no backup)
 ensure_moonraker_allowed_service
