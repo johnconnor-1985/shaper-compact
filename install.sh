@@ -202,7 +202,8 @@ ensure_moonraker_allowed_service() {
   fi
 
   cp -a "${tmp}.new" "$MOONRAKER_ASVC"
-  chown "${USER_NAME}:${USER_NAME}" "$MOONRAKER_ASVC" 2>/dev/null || true
+  sudo chown root:root "$MOONRAKER_ASVC"
+  sudo chmod 444 "$MOONRAKER_ASVC"
   CONFIG_CHANGED=1
 
   rm -f "$tmp" "${tmp}.new"
