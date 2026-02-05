@@ -20,8 +20,12 @@ set -euo pipefail
 #         * _MCU_SERIAL_ -> /dev/serial/by-id/usb-Klipper_* (prefer stm32h723xx)
 #         * _MCU_CONTROL_BOARD_SERIAL_ -> /dev/serial/by-id/usb-1a86_*
 #       If not detectable or ambiguous, placeholders are kept (no error).
-#  3) Service hygiene:
-#     - crowsnest is configured to not be considered failed when no camera is attached.
+#  3) Moonraker update integration:
+#     - Render moonraker.conf pinned_commit placeholders from versions.env:
+#         * _KLIPPER_PINNED_VERSION_   -> KLIPPER_REF
+#         * _MOONRAKER_PINNED_VERSION_ -> MOONRAKER_REF
+#     - Install systemd oneshot service "shaper_compact" that runs update.sh
+#     - Add "shaper_compact" to Moonraker allowed services (moonraker.asvc)
 #  4) Restart:
 #     - If any config file changed, restart related services at the end.
 # ------------------------------------------------------------
@@ -84,6 +88,10 @@ need_cmd readlink
 need_cmd mktemp
 need_cmd grep
 need_cmd mkdir
+need_cmd chmod
+need_cmd cat
+need_cmd sort
+need_cmd uniq
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -105,16 +113,105 @@ MOUNT_POINT="/media/usb"
 CONFIG_ROOT="${PRINTER_DATA}/config"
 TARGET_CONFIGS_DIR="${CONFIG_ROOT}/Configs"
 BACKUP_DIR="${CONFIG_ROOT}/Backup"
+MOONRAKER_ASVC="${CONFIG_ROOT}/moonraker.asvc"
 
 UID_NUM="$(id -u "${USER_NAME}")"
 GID_NUM="$(id -g "${USER_NAME}")"
 
 CONFIG_CHANGED=0
 
+# -----------------------------
+# Repo/versions helpers
+# -----------------------------
+KLIPPER_REF=""
+MOONRAKER_REF=""
+
+load_versions_env() {
+  local vf="${REPO_DIR}/versions.env"
+  if [[ -f "$vf" ]]; then
+    # shellcheck disable=SC1090
+    source "$vf"
+  fi
+}
+
+render_moonraker_conf() {
+  # usage: render_moonraker_conf SRC DST
+  local src="$1"
+  local dst="$2"
+  cp -a "$src" "$dst"
+
+  if [[ -n "${KLIPPER_REF:-}" ]]; then
+    sed -i "s|_KLIPPER_PINNED_VERSION_|${KLIPPER_REF}|g" "$dst"
+  fi
+  if [[ -n "${MOONRAKER_REF:-}" ]]; then
+    sed -i "s|_MOONRAKER_PINNED_VERSION_|${MOONRAKER_REF}|g" "$dst"
+  fi
+}
+
+install_shaper_compact_service() {
+  local unit_path="/etc/systemd/system/shaper_compact.service"
+  local content
+  content=$(cat <<EOF
+[Unit]
+Description=Shaper Compact Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=${USER_NAME}
+WorkingDirectory=${HOME_DIR}/shaper-compact
+ExecStart=/usr/bin/env bash ${HOME_DIR}/shaper-compact/update.sh
+
+EOF
+)
+  write_file_sudo "$unit_path" "$content"
+  sudo systemctl daemon-reload
+
+  # Ensure update.sh is executable if present
+  if [[ -f "${HOME_DIR}/shaper-compact/update.sh" ]]; then
+    chmod +x "${HOME_DIR}/shaper-compact/update.sh" 2>/dev/null || true
+  fi
+}
+
+ensure_moonraker_allowed_service() {
+  # moonraker.asvc is a newline list of allowed service names.
+  # We ensure "shaper_compact" is present. No error if file doesn't exist.
+  local tmp
+  tmp="$(mktemp)"
+
+  if [[ -f "$MOONRAKER_ASVC" ]]; then
+    cp -a "$MOONRAKER_ASVC" "$tmp"
+  else
+    : > "$tmp"
+  fi
+
+  # Append and normalize (unique, non-empty)
+  {
+    cat "$tmp"
+    echo "shaper_compact"
+  } | sed '/^[[:space:]]*$/d' | sort | uniq > "${tmp}.new"
+
+  if [[ -f "$MOONRAKER_ASVC" ]] && cmp -s "${tmp}.new" "$MOONRAKER_ASVC"; then
+    rm -f "$tmp" "${tmp}.new"
+    return 0
+  fi
+
+  if [[ -f "$MOONRAKER_ASVC" ]]; then
+    cp -a "$MOONRAKER_ASVC" "${BACKUP_DIR}/moonraker.asvc.bak-$(timestamp)"
+  fi
+
+  cp -a "${tmp}.new" "$MOONRAKER_ASVC"
+  chown "${USER_NAME}:${USER_NAME}" "$MOONRAKER_ASVC" 2>/dev/null || true
+  CONFIG_CHANGED=1
+
+  rm -f "$tmp" "${tmp}.new"
+}
+
 # ------------------------------------------------------------
 # Step 1: Ensure directories
 # ------------------------------------------------------------
-echo "[1/6] Preparing directories..."
+echo "[1/7] Preparing directories..."
 mkdir -p "$GCODE_ROOT" "$USB_DIR"
 mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
 sudo mkdir -p "$MOUNT_POINT"
@@ -122,7 +219,7 @@ sudo mkdir -p "$MOUNT_POINT"
 # ------------------------------------------------------------
 # Step 2: Sync repo and deploy config files
 # ------------------------------------------------------------
-echo "[2/6] Syncing repository and deploying configuration..."
+echo "[2/7] Syncing repository and deploying configuration..."
 
 REPO_URL="https://github.com/johnconnor-1985/shaper-compact.git"
 REPO_BRANCH="main"
@@ -149,6 +246,8 @@ if [[ ! -d "${SRC_DIR}" ]]; then
   echo "Missing directory in repo: ${SRC_DIR}" >&2
   exit 1
 fi
+
+load_versions_env
 
 require_file() {
   local f="$1"
@@ -257,7 +356,15 @@ CONFIGS_FILES=(
 
 for f in "${ROOT_FILES[@]}"; do
   require_file "$f"
-  deploy_file "${SRC_DIR}/${f}" "${CONFIG_ROOT}/${f}"
+
+  if [[ "$f" == "moonraker.conf" ]]; then
+    tmp="$(mktemp)"
+    render_moonraker_conf "${SRC_DIR}/${f}" "$tmp"
+    deploy_file "$tmp" "${CONFIG_ROOT}/${f}"
+    rm -f "$tmp"
+  else
+    deploy_file "${SRC_DIR}/${f}" "${CONFIG_ROOT}/${f}"
+  fi
 done
 
 for f in "${CONFIGS_FILES[@]}"; do
@@ -268,9 +375,16 @@ done
 apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 
 # ------------------------------------------------------------
-# Step 3: Cleanup and USB service reset
+# Step 3: Moonraker service integration (update button -> update.sh)
 # ------------------------------------------------------------
-echo "[3/6] Cleaning gcodes root and resetting USB services..."
+echo "[3/7] Installing shaper_compact service and Moonraker allowlist..."
+install_shaper_compact_service
+ensure_moonraker_allowed_service
+
+# ------------------------------------------------------------
+# Step 4: Cleanup and USB service reset
+# ------------------------------------------------------------
+echo "[4/7] Cleaning gcodes root and resetting USB services..."
 
 sudo systemctl stop "usb-gcode@*.service" 2>/dev/null || true
 sudo systemctl reset-failed 2>/dev/null || true
@@ -288,16 +402,16 @@ find "$GCODE_ROOT" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} + 2>/dev/null 
 rm -f "$USB_DIR"/* 2>/dev/null || true
 
 # ------------------------------------------------------------
-# Step 4: Ensure exFAT support
+# Step 5: Ensure exFAT support
 # ------------------------------------------------------------
-echo "[4/6] Installing exFAT support..."
+echo "[5/7] Installing exFAT support..."
 sudo apt-get update
 sudo apt-get install -y exfat-fuse exfatprogs
 
 # ------------------------------------------------------------
-# Step 5: Install usb-gcode handler + systemd + udev
+# Step 6: Install usb-gcode handler + systemd + udev
 # ------------------------------------------------------------
-echo "[5/6] Installing USB handler, systemd unit, and udev rules..."
+echo "[6/7] Installing USB handler, systemd unit, and udev rules..."
 
 USB_GCODE_SH_CONTENT=$(cat <<EOF
 #!/usr/bin/env bash
@@ -371,12 +485,12 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 
 # ------------------------------------------------------------
-# Restart services if configuration changed
+# Step 7: Restart services if configuration changed
 # ------------------------------------------------------------
-if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
-  echo
-  echo "Configuration changed. Restarting services..."
+echo "[7/7] Finalizing..."
 
+if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
+  echo "Configuration changed. Restarting services..."
   sudo systemctl restart klipper 2>/dev/null || true
   sudo systemctl restart moonraker 2>/dev/null || true
   sudo systemctl restart KlipperScreen 2>/dev/null || true
@@ -393,9 +507,9 @@ echo "  2) Wait a few seconds"
 echo "  3) Check:"
 echo "     ls -la \"${USB_DIR}\""
 echo
-echo "Debug:"
-echo "  mount | grep \"${MOUNT_POINT}\""
-echo "  systemctl status usb-gcode@sda1.service"
+echo "Update Manager integration:"
+echo "  - Systemd service installed: shaper_compact.service"
+echo "  - Moonraker allowlist updated: ${MOONRAKER_ASVC}"
 echo
 echo "Config deployed to:"
 echo "  ${CONFIG_ROOT}/ (printer.cfg, mainsail.cfg, crowsnest.conf, KlipperScreen.conf, moonraker.conf)"
