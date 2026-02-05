@@ -1,0 +1,48 @@
+/* Custom theme from KlipperScreen.com | 05 Feb 2026 */
+*{color: #d19dff;}
+window{background-color: #3a0f6b;}
+button{background-color: #3a0f6b;}
+button:active{background-color: #222222;}
+.button_active{background-color: #222222; border-radius: 1em;}
+button.color1{border-bottom-color: #a53eff; border-bottom-width: 2px;}
+button.color2{border-bottom-color: #a53eff;  border-bottom-width: 2px;}
+button.color3{border-bottom-color: #a53eff; border-bottom-width: 2px;}
+button.color4{border-bottom-color: #a53eff; border-bottom-width: 2px;}
+button.active{background-color: #20303D;}
+button.update{background: #009384; border-color: #009384;}
+button.invalid{background: #e61e1e; border-color: #e61e1e;}
+combobox box button{border-color: #a53eff;}
+switch{background-color: #222222;}
+switch:checked{background-color: #a53eff;}
+entry{background-color: #222222; border-color: #000000;}
+label{color: #d19dff;}
+menu{background-color: #3a0f6b; border-color: #a53eff;}
+menuitem{background-color: #3a0f6b; border-color: #a53eff;}
+trough{background-color: #a53eff; color: #d19dff; border-color: #000000;}
+trough highlight, trough progress{background-color: #d19dff; color: #d19dff; border-color: #000000;}
+scale-mark{color: #d19dff;}
+scrollbar, scrollbar button, scrollbar trough{background-color: #3a0f6b;}
+scrollbar slider{ background-color: #a53eff;}
+textview .time{color: #d19dff;}
+.popup{background-color: #3a0f6b;}
+.dialog{border: #3a0f6b; background-color: #3a0f6b;}
+.dialog button{border-bottom-color: #009384;}
+.dialog button:nth-child(1){border-bottom-color: #A7E100;}
+.dialog button:nth-child(2){border-bottom-color: #cc1e1e;}
+.distbutton_active{background-color: #20303D;}
+.distbutton_top{border-color: #a53eff;}
+.distbutton{border-color: #a53eff; border-left-color: #a53eff;}
+.distbutton_bottom{border-color: #a53eff; border-left-color: #a53eff;}
+.fan_slider{color: #d19dff;}
+.message_popup{border-bottom-color: #a53eff;}
+.numpad_tleft, .numpad_top, .numpad_tright, .numpad_left, .numpad_button, .numpad_right, .numpad_bleft, .numpad_bottom, .numpad_bright{border-color: #a53eff;}
+.printing-status{color: #d19dff;}
+.printing-progress-text{color: #d19dff;}
+.printing-status-label{color: #d19dff;}
+.tempbutton_top{border-color: #a53eff;}
+.tempbutton, .tempbutton_bottom{border-color: #a53eff; border-top-color: #a53eff;}
+.message{border-color: #981E1F; color: #d19dff; background-color: #981E1F;}
+.message button{background-color: #d19dff; color: #000000;}
+.warning{background-color: rgba(30, 204, 39, 0.7);}
+.error{background-color: rgba(204, 30, 30, 0.7);}
+.keyboard_pad{background-color: #3a0f6b;}
