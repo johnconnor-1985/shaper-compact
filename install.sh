@@ -539,18 +539,22 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 
 # ------------------------------------------------------------
-# Step 7: Restart services if configuration changed
+# Step 7: Restart services
 # ------------------------------------------------------------
 echo "[7/7] Finalizing..."
 
+# Always restart KlipperScreen to refresh UI/themes
+echo "Restarting KlipperScreen (UI refresh)..."
+sudo systemctl restart KlipperScreen 2>/dev/null || true
+
 if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
-  echo "Configuration changed. Restarting services..."
+  echo "Configuration changed. Restarting core services..."
   sudo systemctl restart klipper 2>/dev/null || true
   sudo systemctl restart moonraker 2>/dev/null || true
-  sudo systemctl restart KlipperScreen 2>/dev/null || true
   sudo systemctl restart crowsnest 2>/dev/null || true
   sudo systemctl restart nginx 2>/dev/null || true
 fi
+
 
 echo
 echo "Installation completed."
