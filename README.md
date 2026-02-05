@@ -2,7 +2,7 @@
 Installer and configuration files for Shaper Compact
 
 
-How to launch the Installer:
+How to launch the Installer from SSH:
 
 ```bash
 cd ~ && \
