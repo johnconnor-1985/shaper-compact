@@ -25,7 +25,8 @@ set -euo pipefail
 #         * _KLIPPER_PINNED_VERSION_   -> KLIPPER_REF
 #         * _MOONRAKER_PINNED_VERSION_ -> MOONRAKER_REF
 #     - Install systemd oneshot service "shaper_compact" that runs update.sh
-#     - Add "shaper_compact" to Moonraker allowed services (moonraker.asvc)
+#     - Add "shaper_compact" to Moonraker allowed services:
+#         * /home/velvet/printer_data/moonraker.asvc
 #  4) Restart:
 #     - If any config file changed, restart related services at the end.
 # ------------------------------------------------------------
@@ -87,7 +88,6 @@ need_cmd sed
 need_cmd readlink
 need_cmd mktemp
 need_cmd grep
-need_cmd mkdir
 need_cmd chmod
 need_cmd cat
 need_cmd sort
@@ -113,7 +113,9 @@ MOUNT_POINT="/media/usb"
 CONFIG_ROOT="${PRINTER_DATA}/config"
 TARGET_CONFIGS_DIR="${CONFIG_ROOT}/Configs"
 BACKUP_DIR="${CONFIG_ROOT}/Backup"
-MOONRAKER_ASVC="${CONFIG_ROOT}/moonraker.asvc"
+
+# IMPORTANT: on your system Moonraker reads allowlist here (not under config/)
+MOONRAKER_ASVC="${PRINTER_DATA}/moonraker.asvc"
 
 UID_NUM="$(id -u "${USER_NAME}")"
 GID_NUM="$(id -g "${USER_NAME}")"
@@ -168,7 +170,6 @@ EOF
   write_file_sudo "$unit_path" "$content"
   sudo systemctl daemon-reload
 
-  # Ensure update.sh is executable if present
   if [[ -f "${HOME_DIR}/shaper-compact/update.sh" ]]; then
     chmod +x "${HOME_DIR}/shaper-compact/update.sh" 2>/dev/null || true
   fi
@@ -176,7 +177,7 @@ EOF
 
 ensure_moonraker_allowed_service() {
   # moonraker.asvc is a newline list of allowed service names.
-  # We ensure "shaper_compact" is present. No error if file doesn't exist.
+  # Ensure "shaper_compact" is present; backup only if file existed and changes.
   local tmp
   tmp="$(mktemp)"
 
@@ -186,7 +187,6 @@ ensure_moonraker_allowed_service() {
     : > "$tmp"
   fi
 
-  # Append and normalize (unique, non-empty)
   {
     cat "$tmp"
     echo "shaper_compact"
@@ -375,7 +375,7 @@ done
 apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 
 # ------------------------------------------------------------
-# Step 3: Moonraker service integration (update button -> update.sh)
+# Step 3: Moonraker update integration (update button -> update.sh)
 # ------------------------------------------------------------
 echo "[3/7] Installing shaper_compact service and Moonraker allowlist..."
 install_shaper_compact_service
