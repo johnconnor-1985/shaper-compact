@@ -1,274 +1,255 @@
-/* Velvet-darker hybrid:
-   - Keeps blurry-theme transparency & background image
-   - Adopts material-darker geometry (sharper corners) + darker panels
-*/
-
-@define-color text #ffffff;
-
-/* Velvet palette */
-@define-color velvet_accent #6a5acd;      /* slateblue */
-@define-color velvet_accent_2 #4b2a7a;    /* deep purple */
-@define-color ok #2f5631;
-@define-color warn #EF6C00;
-@define-color err #B71C1C;
-
-/* Surfaces (RGBA so background stays visible) */
-@define-color bg #0b0b10;
-@define-color panel rgba(18, 18, 18, 0.55);        /* main panels */
-@define-color panel_2 rgba(28, 28, 28, 0.55);      /* alt panels */
-@define-color panel_active rgba(66, 66, 66, 0.55); /* pressed/active */
-@define-color stroke rgba(255, 255, 255, 0.08);
-
-/* Geometry */
-@define-color radius_s 0.22em;
-@define-color radius_m 0.28em;
+/* Based on Material-darker theme created by Alfredo Monclus 2021 */
+@define-color color_1 #e2e2e2;
+@define-color color_2 #2196f3;
+@define-color color_3 #fb8c00;
+@define-color color_4 #9E9E9E;
+@define-color color_5 #121212;
+@define-color background-color_2 #1c1c1c;
+@define-color background-color_3 #424242;
+@define-color background-color_4 #252525;
+@define-color background-color_5 #2f5631;
+@define-color background-color_6 #006064;
+@define-color background-color_7 #545454;
+@define-color background-color_8 #006412;
+@define-color background-color_9 #EF6C00;
+@define-color background-color_10 #B71C1C;
+@define-color background-color_12 #f9b274;
+@define-color background-color_13 #CF6679;
+@define-color background-color_14 #090909;
+@define-color border-color_6 #a2a2a2;
+@define-color border-color_7 #282828;
 
 * {
-    color: @text;
     background-color: transparent;
+}
+
+* {
+    color: #e2e2e2;
     font-family: RobotoMedium;
 }
 
-/* Background + main window */
+junction,
+list row,
+treeview.view,
+window {
+    background-color: transparent;
+}
+
 window {
     background-color: @bg;
     background-image: url("./styles/velvet-darker/background.png");
     background-size: cover;
-    background-position: center;
+
 }
 
-/* Lists / containers */
-junction,
-list row,
-treeview.view {
-    background-color: transparent;
-}
-
-/* “Material-like” list rows: sharper + darker panel */
-list row {
-    background-color: @panel;
-    border: 1px solid @stroke;
-    border-top-left-radius: @radius_m;
-    border-top-right-radius: @radius_m;
-}
-
-/* Buttons: material geometry but keep transparency */
 button {
-    background-color: @panel;
-    border: 1px solid @stroke;
-    border-radius: @radius_s;      /* sharper */
-    box-shadow: none;             /* material flatter */
+    background-color: #121212;
 }
 
-/* Active/pressed */
-button:active,
-.button_active,
-button.active {
-    background-color: @panel_active;
-    border-style: none;
-    border-radius: @radius_s;
-    box-shadow: none;
+button:active {
+    background-color: #424242;
 }
 
-/* Default colored buttons like material-darker (with subtle velvet accent) */
+.button_active {
+    border-color: #424242;
+    border-style: solid;
+    background-color: #424242;
+}
+
 button.color1,
 button.color2,
 button.color3,
 button.color4 {
-    background-color: @panel_2;
-    border-color: rgba(0,0,0,0); /* no visible border */
-    border-radius: @radius_s;
+    background-color: #252525;
+    border-color: #252525;
+    border-radius: .25em;
     padding-top: 0.4em;
 }
 
-/* Make “update” and “invalid” feel like material outlined buttons */
+button.color1:active,
+button.color2:active,
+button.color3:active,
+button.color4:active,
+button.update:active,
+button.invalid:active,
+.dialog button:active {
+    border-style: none;
+    background-color: transparent;
+}
+
 .active image,
 button.update {
-    color: @velvet_accent;
-    background-color: @panel;
-    border-color: @velvet_accent;
-    border-radius: @radius_m;
+    color: #2196f3;
+    background-color: transparent;
+    border-color: #2196f3;
+    border-radius: .5em;
     border-width: .1em;
 }
 
 button.invalid {
-    color: @warn;
-    background-color: @panel;
-    border-color: @warn;
-    border-radius: @radius_m;
+    color: #fb8c00;
+    background-color: transparent;
+    border-color: #fb8c00;
+    border-radius: .5em;
     border-width: .1em;
 }
 
-/* Menus / combobox: keep transparency but use darker panels */
 menu,
-popover,
-popover button,
-combobox arrow,
 menuitem,
-combobox menuitem {
-    background-color: transparent;
-}
-
 combobox button,
-combobox box button {
-    background-color: @panel;
-    border: 1px solid @stroke;
-    border-radius: @radius_m;
+combobox arrow,
+combobox menuitem {
+    background-color: #252525;
+    border-color: #121212;
 }
 
-combobox window.popup {
-    background-color: transparent;
-    border-color: transparent;
-}
-
-menu {
-    background-color: rgba(10, 10, 16, 0.55);
-    border: 0.15em solid rgba(0,0,0,0.2);
-    border-radius: @radius_m;
-}
-
-menuitem {
-    background-color: transparent;
-    border: none;
-}
-
-/* Toggles / checks: material-like */
 treeview.view check,
 switch {
-    background-color: @panel;
-    border: 1px solid @stroke;
-    border-radius: @radius_s;
+    background-color: transparent;
 }
 
 treeview.view check:checked,
 switch:checked {
-    background-color: @ok;
+    background-color: #2f5631;
 }
 
-/* Use your local icon path like in material-darker */
 treeview.view check:checked {
-    -gtk-icon-source: url("./styles/velvet-darker/images/complete.svg");
+    -gtk-icon-source: url("./styles/material-darker/images/complete.svg");
 }
 
-/* Entries / input */
-entry {
-    background-color: rgba(10, 10, 16, 0.45);
-    border: 1px solid @stroke;
-    border-radius: @radius_s;
-    margin-bottom: 0.5em;
-    box-shadow: none;
+label {
+    color: #e2e2e2;
 }
 
-/* Progress / trough: keep translucent but use material colors */
 trough {
-    background-color: @panel;
-    color: @text;
-    border: 1px solid @stroke;
-    border-radius: 1em; /* trough rounded is ok */
-    box-shadow: none;
+    background-color: #121212;
+    color: #e2e2e2;
 }
 
 trough highlight,
 trough progress {
-    background-color: rgba(47, 86, 49, 0.80); /* ok-green */
-    border: none;
-    border-top-left-radius: 1em;
-    border-bottom-left-radius: 1em;
-    box-shadow: none;
+    background-color: #2f5631;
+    color: #e2e2e2;
+}
+
+scale-mark {
+    color: #e2e2e2;
 }
 
 scrollbar,
 scrollbar button,
 scrollbar trough {
-    background-color: transparent;
+    background-color: #121212;
 }
 
 scrollbar slider {
-    background-color: rgba(217, 217, 217, 0.45);
-    border-radius: 1em;
+    background-color: #1c1c1c;
 }
 
-/* Dialogs */
+textview .time {
+    color: #9E9E9E;
+}
+
+.active_device {
+    background-color: #1c1c1c;
+}
+
 .dialog {
     border: 0;
-    background-color: transparent;
+    background-color: #121212;
 }
 
 .dialog button {
-    background-color: @panel_2;
-    border-radius: @radius_s;
-    border: 1px solid @stroke;
+    background-color: #252525;
+    border-radius: .25em;
 }
 
-/* Toggle button groups */
-.horizontal_togglebuttons {
-    border: 1px solid @stroke;
-    background-color: @panel_2;
-    border-radius: @radius_s;
-    margin-right: 5px;
-    box-shadow: none;
+
+.dialog-error {
+    border-bottom-color: #CF6679;
+}
+
+.dialog-warning {
+    border-bottom-color: #f9b274;
+}
+
+.dialog-info {
+    border-bottom-color: @color4;
+}
+
+.dialog-default {
+    border-bottom-color: @color3;
+}
+
+.dialog-secondary {
+     border-bottom-color: @color2;
+}
+
+.dialog-primary {
+     border-bottom-color: @color1;
+}
+
+.horizontal_togglebuttons  {
+    border-color: #545454;
+    border-width: .1em;
+    background-color: #252525;
 }
 
 .horizontal_togglebuttons_active {
-    background-color: rgba(75, 42, 122, 0.70); /* velvet purple active */
-    box-shadow: none;
+    background-color: #545454;
 }
 
-/* Numpad: material-ish blocks */
-.numpad_tleft,
-.numpad_top,
-.numpad_tright,
-.numpad_left,
-.numpad_button,
-.numpad_right,
-.numpad_bleft,
-.numpad_bottom,
-.numpad_bright {
-    border-color: @stroke;
-    background-color: @panel_2;
-    border-radius: @radius_s;
-    margin-right: 0.25em;
-    margin-left: 0.25em;
-    margin-bottom: 0.5em;
+.fan_slider {
+    color: #e2e2e2;
 }
 
-.message button {
-    color: @bg;
-}
-
-/* Warning / Error */
-.warning {
-    background-color: rgba(239, 108, 0, 0.85);
-}
-
-.message_popup_warning,
-.message_popup_warning button {
-    background-color: rgba(239, 108, 0, 0.85);
-}
-
-.message_popup_error,
-.message_popup_error button {
-    background-color: rgba(183, 28, 28, 0.85);
+.message_popup {
+    border-bottom-color: #e2e2e2;
 }
 
 .message_popup_echo,
 .message_popup_echo button {
-    background-color: rgba(0, 100, 18, 0.85);
+    background-color: #006412;
 }
 
-/* Keyboard */
+.message_popup_warning,
+.message_popup_warning button {
+    background-color: #EF6C00;
+}
+
+.message_popup_error,
+.message_popup_error button {
+    background-color: #B71C1C;
+}
+
+.numpad_key {
+    border-color: #545454;
+    background-color: #252525;
+}
+
+.printing-status {
+    color: #e2e2e2;
+}
+
+.printing-progress-text {
+    color: #e2e2e2;
+}
+
+.printing-status-label {
+    color: #9E9E9E;
+}
+
+.message {
+    border-color: #B71C1C;
+    color: #e2e2e2;
+    background-color: #B71C1C;
+}
+
+.message button {
+    background-color: #e2e2e2;
+    color: #121212;
+}
+
 .keyboard_pad {
-    background-color: rgba(10, 10, 16, 0.55);
-    margin-right: 0.3em;
-    margin-bottom: 0.3em;
-    box-shadow: none;
-}
-
-/* Graph labels */
-.graph_label {
-    background-color: @panel;
-    border-left-width: 4px;
-    border-left-style: solid;
-    border-left-color: @velvet_accent;
-    border-radius: @radius_s;
+    background-color: #090909;
 }
