@@ -1,4 +1,4 @@
-/* blurry-theme created by Sascha Buerger 2023 */
+/* based on blurry-theme created by Sascha Buerger 2023 */
 @define-color color1 #f9a825;
 @define-color color2 #d33682;
 @define-color color3 #2aa198;
@@ -26,7 +26,7 @@ treeview.view {
 
 window {
     background-color: @bg;
-    background-image: url("./styles/blurry2/background.png");
+    background-image: url("./styles/velvet-darker/background.png");
     background-size: cover;
 
 }
