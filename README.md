@@ -1,5 +1,5 @@
 # shaper-compact
-Installer and configuration files for Shaper Compact
+Installer, Updater and configuration files for Shaper Compact
 
 
 How to launch the Installer from SSH:
@@ -16,3 +16,5 @@ else
 fi && \
 bash install.sh
 ```
+
+Please launch the Updater only from Updated Manager in Maisail/KlipperScreen
