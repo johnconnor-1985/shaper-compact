@@ -3,38 +3,36 @@ set -euo pipefail
 
 # ------------------------------------------------------------
 # Shaper Compact - Installer
-# Features:
-#  1) USB G-code workflow:
-#     - Auto-mount vfat/exfat USB drives on insert (udev + systemd)
-#     - Expose ONLY *.gcode files in:  ~/printer_data/gcodes/USB
-#     - Use technical mount point:     /media/usb
-#     - Cleanup gcodes root: delete everything except "USB"
-#  2) Deploy config from Git:
-#     - Pull shaper-compact repo (or use local repo if running inside it)
-#     - Copy files from repo ./configs to Klipper config directories:
-#         * macros.cfg, setup.cfg -> <printer_data>/config/Configs/
-#         * all others            -> <printer_data>/config/
-#     - Backups are stored in <printer_data>/config/Backup/
-#       and created only if destination existed and differed.
-#     - Best-effort MCU serial injection into printer.cfg:
-#         * _MCU_SERIAL_ -> /dev/serial/by-id/usb-Klipper_* (prefer stm32h723xx)
-#         * _MCU_CONTROL_BOARD_SERIAL_ -> /dev/serial/by-id/usb-1a86_*
-#       If not detectable or ambiguous, placeholders are kept (no error).
+#
+#  0) Sync shaper-compact repo (or use local repo if running inside it)
+#  1) ENSURE + PIN all required software to versions.env:
+#       - Klipper (git)
+#       - Moonraker (git)
+#       - Crowsnest (git)          (optional but supported)
+#       - KlipperScreen (git)      (and best-effort service/venv if missing)
+#       - Mainsail: shipped by MainsailOS (web bundle) -> no pin here
+#       - System OS: NOT pinned here (apt upgrades are not rollbackable)
+#  2) Deploy config files from repo ./configs to printer_data:
+#       - macros.cfg, setup.cfg -> <printer_data>/config/Configs/
+#       - others (incl. printer.cfg) -> <printer_data>/config/
+#       - printer.cfg: best-effort MCU serial injection for placeholders
 #  3) Moonraker update integration:
-#     - Render moonraker.conf pinned_commit placeholders from versions.env:
-#         * _KLIPPER_PINNED_VERSION_   -> KLIPPER_REF
-#         * _MOONRAKER_PINNED_VERSION_ -> MOONRAKER_REF
-#     - Install systemd oneshot service "shaper_compact" that runs update.sh
-#     - Add "shaper_compact" to Moonraker allowed services:
-#         * /home/velvet/printer_data/moonraker.asvc
-#  4) Mainsail theme deployment:
-#     - Copy repo ./configs/Mainsail/* to <printer_data>/config/.theme/
-#     - No backups for .theme; existing contents are replaced.
-#  5) KlipperScreen theme deployment:
-#     - Copy repo ./configs/KlipperScreen/velvet-darker to ~/KlipperScreen/styles/velvet-darker
-#     - No backups for the theme; existing contents are replaced.
+#       - Render moonraker.conf placeholders from versions.env:
+#           _KLIPPER_PINNED_VERSION_   -> KLIPPER_REF
+#           _MOONRAKER_PINNED_VERSION_ -> MOONRAKER_REF
+#       - Install systemd oneshot service "shaper_compact" -> runs update.sh
+#       - Add "shaper_compact" to Moonraker allowlist:
+#           <printer_data>/moonraker.asvc (root:root 444)
+#  4) Themes:
+#       - Mainsail: ./configs/Mainsail/* -> <printer_data>/config/.theme/ (replace, no backup)
+#       - KlipperScreen: ./configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker (replace, no backup)
+#  5) USB G-code workflow:
+#       - udev + systemd template to mount USB vfat/exfat to /media/usb (RO)
+#       - expose only root/*.gcode as symlinks in: <printer_data>/gcodes/USB
+#       - IMPORTANT: only triggers on ID_BUS=="usb" (won't hit mmcblk0p1)
 #  6) Restart:
-#     - If any config file changed, restart related services at the end.
+#       - Always restart KlipperScreen (UI refresh)
+#       - Restart other services only if configs/themes changed
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -63,6 +61,12 @@ write_file_sudo() {
   sudo mkdir -p "$(dirname "$path")"
   backup_file_sudo "$path"
   printf "%s" "$content" | sudo tee "$path" >/dev/null
+}
+
+is_git_repo() { [[ -d "$1/.git" ]]; }
+
+is_hex40() {
+  [[ "${1:-}" =~ ^[0-9a-fA-F]{40}$ ]]
 }
 
 echo "Shaper Compact Installer"
@@ -100,6 +104,7 @@ need_cmd sort
 need_cmd uniq
 need_cmd rm
 need_cmd cp
+need_cmd mkdir
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -123,7 +128,7 @@ TARGET_CONFIGS_DIR="${CONFIG_ROOT}/Configs"
 BACKUP_DIR="${CONFIG_ROOT}/Backup"
 THEME_DIR="${CONFIG_ROOT}/.theme"
 
-# IMPORTANT: on your system Moonraker reads allowlist here (not under config/)
+# IMPORTANT: Moonraker reads allowlist here (not under config/)
 MOONRAKER_ASVC="${PRINTER_DATA}/moonraker.asvc"
 
 UID_NUM="$(id -u "${USER_NAME}")"
@@ -131,20 +136,161 @@ GID_NUM="$(id -g "${USER_NAME}")"
 
 CONFIG_CHANGED=0
 
-# -----------------------------
-# Repo/versions helpers
-# -----------------------------
-KLIPPER_REF=""
-MOONRAKER_REF=""
+# ------------------------------------------------------------
+# Repo bootstrap (self)
+# ------------------------------------------------------------
+REPO_URL="https://github.com/johnconnor-1985/shaper-compact.git"
+REPO_BRANCH="main"
+DEFAULT_REPO_DIR="${HOME_DIR}/shaper-compact"
 
-load_versions_env() {
-  local vf="${REPO_DIR}/versions.env"
-  if [[ -f "$vf" ]]; then
-    # shellcheck disable=SC1090
-    source "$vf"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$DEFAULT_REPO_DIR"
+
+sync_self_repo() {
+  if [[ -d "${SCRIPT_DIR}/configs" && -f "${SCRIPT_DIR}/versions.env" ]]; then
+    REPO_DIR="${SCRIPT_DIR}"
+    return 0
+  fi
+
+  if [[ -d "${REPO_DIR}/.git" ]]; then
+    git -C "${REPO_DIR}" fetch --all --prune
+    git -C "${REPO_DIR}" checkout "${REPO_BRANCH}" >/dev/null 2>&1 || true
+    git -C "${REPO_DIR}" pull --ff-only
+  else
+    rm -rf "${REPO_DIR}" 2>/dev/null || true
+    git clone --branch "${REPO_BRANCH}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
   fi
 }
 
+# Prevent "dirty" status due to executable bit differences on embedded systems
+set_repo_filemode_false() {
+  git -C "$1" config core.fileMode false 2>/dev/null || true
+}
+
+# ------------------------------------------------------------
+# versions.env
+# ------------------------------------------------------------
+load_versions_env() {
+  local vf="${REPO_DIR}/versions.env"
+  if [[ ! -f "$vf" ]]; then
+    echo "Missing versions.env in repo: $vf" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  source "$vf"
+}
+
+validate_versions_env() {
+  # required pins (you can relax these if you want)
+  for v in KLIPPER_REF MOONRAKER_REF KSCREEN_REF CROWSNEST_REF; do
+    local val="${!v:-}"
+    if [[ -n "$val" ]] && ! is_hex40 "$val"; then
+      echo "versions.env error: $v is not a 40-hex commit: '$val'" >&2
+      exit 1
+    fi
+  done
+}
+
+# ------------------------------------------------------------
+# Pinned git repos (ensure + pin)
+# ------------------------------------------------------------
+ensure_and_pin_repo() {
+  # usage: ensure_and_pin_repo NAME DIR ORIGIN BRANCH PIN
+  local name="$1"
+  local dir="$2"
+  local origin="$3"
+  local branch="$4"
+  local pin="$5"
+
+  if [[ -z "$pin" ]]; then
+    echo "[$name] pin empty -> skipping"
+    return 0
+  fi
+  if ! is_hex40 "$pin"; then
+    echo "[$name] invalid pin (not 40-hex): $pin" >&2
+    exit 1
+  fi
+
+  if ! is_git_repo "$dir"; then
+    echo "[$name] not installed -> cloning into $dir"
+    rm -rf "$dir" 2>/dev/null || true
+    git clone --branch "$branch" --depth 1 "$origin" "$dir"
+  fi
+
+  set_repo_filemode_false "$dir"
+
+  echo "[$name] fetching..."
+  git -C "$dir" fetch --all --prune >/dev/null 2>&1 || true
+
+  local cur=""
+  cur="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
+
+  if [[ "$cur" != "$pin" ]]; then
+    echo "[$name] pinning to $pin (was: ${cur:-unknown})"
+    git -C "$dir" reset --hard "$pin" >/dev/null
+    git -C "$dir" clean -fd >/dev/null 2>&1 || true
+  else
+    echo "[$name] already pinned: $pin"
+  fi
+}
+
+# ------------------------------------------------------------
+# Best-effort KlipperScreen service/venv (only if missing)
+# ------------------------------------------------------------
+ensure_klipperscreen_service_best_effort() {
+  # If KlipperScreen.service already exists, do nothing.
+  if systemctl list-unit-files | awk '{print $1}' | grep -qx "KlipperScreen.service"; then
+    return 0
+  fi
+
+  local ks_dir="${KSCREEN_DIR:-${HOME_DIR}/KlipperScreen}"
+  if [[ ! -d "$ks_dir" ]]; then
+    return 0
+  fi
+
+  # Create venv if missing
+  local venv_dir="${HOME_DIR}/.KlipperScreen-env"
+  if [[ ! -d "$venv_dir" ]]; then
+    echo "[KlipperScreen] creating venv: $venv_dir"
+    sudo apt-get update
+    sudo apt-get install -y python3-venv python3-pip python3-dev libjpeg-dev zlib1g-dev >/dev/null 2>&1 || true
+    python3 -m venv "$venv_dir" || true
+    "$venv_dir/bin/pip" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+    if [[ -f "$ks_dir/scripts/KlipperScreen-requirements.txt" ]]; then
+      "$venv_dir/bin/pip" install -r "$ks_dir/scripts/KlipperScreen-requirements.txt" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  # Install systemd unit
+  local unit_path="/etc/systemd/system/KlipperScreen.service"
+  local content
+  content=$(cat <<EOF
+[Unit]
+Description=KlipperScreen
+After=network-online.target moonraker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${USER_NAME}
+WorkingDirectory=${ks_dir}
+Environment=PYTHONUNBUFFERED=1
+ExecStart=${venv_dir}/bin/python ${ks_dir}/screen.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)
+  write_file_sudo "$unit_path" "$content"
+  sudo systemctl daemon-reload
+  sudo systemctl enable KlipperScreen >/dev/null 2>&1 || true
+}
+
+# ------------------------------------------------------------
+# Config deploy helpers
+# ------------------------------------------------------------
 render_moonraker_conf() {
   # usage: render_moonraker_conf SRC DST
   local src="$1"
@@ -156,151 +302,6 @@ render_moonraker_conf() {
   fi
   if [[ -n "${MOONRAKER_REF:-}" ]]; then
     sed -i "s|_MOONRAKER_PINNED_VERSION_|${MOONRAKER_REF}|g" "$dst"
-  fi
-}
-
-install_shaper_compact_service() {
-  local unit_path="/etc/systemd/system/shaper_compact.service"
-  local content
-  content=$(cat <<EOF
-[Unit]
-Description=Shaper Compact Update
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=${USER_NAME}
-WorkingDirectory=${HOME_DIR}/shaper-compact
-ExecStart=/usr/bin/env bash ${HOME_DIR}/shaper-compact/update.sh
-
-EOF
-)
-  write_file_sudo "$unit_path" "$content"
-  sudo systemctl daemon-reload
-
-  if [[ -f "${HOME_DIR}/shaper-compact/update.sh" ]]; then
-    chmod +x "${HOME_DIR}/shaper-compact/update.sh" 2>/dev/null || true
-  fi
-}
-
-ensure_moonraker_allowed_service() {
-  # moonraker.asvc is a newline list of allowed service names.
-  local tmp
-  tmp="$(mktemp)"
-
-  if [[ -f "$MOONRAKER_ASVC" ]]; then
-    cp -a "$MOONRAKER_ASVC" "$tmp"
-  else
-    : > "$tmp"
-  fi
-
-  {
-    cat "$tmp"
-    echo "shaper_compact"
-  } | sed '/^[[:space:]]*$/d' | sort | uniq > "${tmp}.new"
-
-  if [[ -f "$MOONRAKER_ASVC" ]] && cmp -s "${tmp}.new" "$MOONRAKER_ASVC"; then
-    sudo chown root:root "$MOONRAKER_ASVC" 2>/dev/null || true
-    sudo chmod 444 "$MOONRAKER_ASVC" 2>/dev/null || true
-    rm -f "$tmp" "${tmp}.new"
-    return 0
-  fi
-
-  # Backup intentionally kept for this file (behavior unchanged)
-  if [[ -f "$MOONRAKER_ASVC" ]]; then
-    cp -a "$MOONRAKER_ASVC" "${BACKUP_DIR}/moonraker.asvc.bak-$(timestamp)"
-  fi
-
-  cp -a "${tmp}.new" "$MOONRAKER_ASVC"
-  sudo chown root:root "$MOONRAKER_ASVC"
-  sudo chmod 444 "$MOONRAKER_ASVC"
-  CONFIG_CHANGED=1
-
-  rm -f "$tmp" "${tmp}.new"
-}
-
-deploy_mainsail_theme() {
-  # Copy repo configs/Mainsail/* -> <printer_data>/config/.theme/
-  # No backups. Existing contents are replaced.
-  local src_theme="${SRC_DIR}/Mainsail"
-
-  if [[ ! -d "$src_theme" ]]; then
-    return 0
-  fi
-
-  rm -rf "$THEME_DIR" 2>/dev/null || true
-  mkdir -p "$THEME_DIR"
-  cp -a "$src_theme"/. "$THEME_DIR"/
-  chown -R "${USER_NAME}:${USER_NAME}" "$THEME_DIR" 2>/dev/null || true
-  CONFIG_CHANGED=1
-}
-
-deploy_klipperscreen_theme() {
-  # Copy repo configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker
-  # No backups. Existing contents are replaced.
-  local src="${SRC_DIR}/KlipperScreen/velvet-darker"
-  local dst="${HOME_DIR}/KlipperScreen/styles/velvet-darker"
-
-  if [[ ! -d "$src" ]]; then
-    return 0
-  fi
-
-  mkdir -p "${HOME_DIR}/KlipperScreen/styles"
-  rm -rf "$dst" 2>/dev/null || true
-  cp -a "$src" "$dst"
-  chown -R "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
-  CONFIG_CHANGED=1
-}
-
-# ------------------------------------------------------------
-# Step 1: Ensure directories
-# ------------------------------------------------------------
-echo "[1/7] Preparing directories..."
-mkdir -p "$GCODE_ROOT" "$USB_DIR"
-mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
-sudo mkdir -p "$MOUNT_POINT"
-
-# ------------------------------------------------------------
-# Step 2: Sync repo and deploy config files
-# ------------------------------------------------------------
-echo "[2/7] Syncing repository and deploying configuration..."
-
-REPO_URL="https://github.com/johnconnor-1985/shaper-compact.git"
-REPO_BRANCH="main"
-DEFAULT_REPO_DIR="${HOME_DIR}/shaper-compact"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$DEFAULT_REPO_DIR"
-
-if [[ -d "${SCRIPT_DIR}/configs" ]]; then
-  REPO_DIR="${SCRIPT_DIR}"
-else
-  if [[ -d "${REPO_DIR}/.git" ]]; then
-    git -C "${REPO_DIR}" fetch --all --prune
-    git -C "${REPO_DIR}" checkout "${REPO_BRANCH}" >/dev/null 2>&1 || true
-    git -C "${REPO_DIR}" pull --ff-only
-  else
-    rm -rf "${REPO_DIR}" 2>/dev/null || true
-    git clone --branch "${REPO_BRANCH}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
-  fi
-fi
-
-git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
-
-SRC_DIR="${REPO_DIR}/configs"
-if [[ ! -d "${SRC_DIR}" ]]; then
-  echo "Missing directory in repo: ${SRC_DIR}" >&2
-  exit 1
-fi
-
-load_versions_env
-
-require_file() {
-  local f="$1"
-  if [[ ! -f "${SRC_DIR}/${f}" ]]; then
-    echo "Missing file in repo: ${SRC_DIR}/${f}" >&2
-    exit 1
   fi
 }
 
@@ -388,6 +389,148 @@ apply_printer_cfg_serials_best_effort() {
   rm -f "$tmp"
 }
 
+# ------------------------------------------------------------
+# Moonraker update integration (service + allowlist)
+# ------------------------------------------------------------
+install_shaper_compact_service() {
+  local unit_path="/etc/systemd/system/shaper_compact.service"
+  local content
+  content=$(cat <<EOF
+[Unit]
+Description=Shaper Compact Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=${USER_NAME}
+WorkingDirectory=${HOME_DIR}/shaper-compact
+ExecStart=/usr/bin/env bash ${HOME_DIR}/shaper-compact/update.sh
+
+EOF
+)
+  write_file_sudo "$unit_path" "$content"
+  sudo systemctl daemon-reload
+
+  if [[ -f "${HOME_DIR}/shaper-compact/update.sh" ]]; then
+    chmod +x "${HOME_DIR}/shaper-compact/update.sh" 2>/dev/null || true
+  fi
+}
+
+ensure_moonraker_allowed_service() {
+  local tmp
+  tmp="$(mktemp)"
+
+  if [[ -f "$MOONRAKER_ASVC" ]]; then
+    cp -a "$MOONRAKER_ASVC" "$tmp"
+  else
+    : > "$tmp"
+  fi
+
+  {
+    cat "$tmp"
+    echo "shaper_compact"
+  } | sed '/^[[:space:]]*$/d' | sort | uniq > "${tmp}.new"
+
+  if [[ -f "$MOONRAKER_ASVC" ]] && cmp -s "${tmp}.new" "$MOONRAKER_ASVC"; then
+    sudo chown root:root "$MOONRAKER_ASVC" 2>/dev/null || true
+    sudo chmod 444 "$MOONRAKER_ASVC" 2>/dev/null || true
+    rm -f "$tmp" "${tmp}.new"
+    return 0
+  fi
+
+  # backup keep (your current behavior)
+  if [[ -f "$MOONRAKER_ASVC" ]]; then
+    cp -a "$MOONRAKER_ASVC" "${BACKUP_DIR}/moonraker.asvc.bak-$(timestamp)"
+  fi
+
+  cp -a "${tmp}.new" "$MOONRAKER_ASVC"
+  sudo chown root:root "$MOONRAKER_ASVC"
+  sudo chmod 444 "$MOONRAKER_ASVC"
+  CONFIG_CHANGED=1
+
+  rm -f "$tmp" "${tmp}.new"
+}
+
+# ------------------------------------------------------------
+# Themes
+# ------------------------------------------------------------
+deploy_mainsail_theme() {
+  local src_theme="${SRC_DIR}/Mainsail"
+  if [[ ! -d "$src_theme" ]]; then
+    return 0
+  fi
+  rm -rf "$THEME_DIR" 2>/dev/null || true
+  mkdir -p "$THEME_DIR"
+  cp -a "$src_theme"/. "$THEME_DIR"/
+  chown -R "${USER_NAME}:${USER_NAME}" "$THEME_DIR" 2>/dev/null || true
+  CONFIG_CHANGED=1
+}
+
+deploy_klipperscreen_theme() {
+  local src="${SRC_DIR}/KlipperScreen/velvet-darker"
+  local dst="${HOME_DIR}/KlipperScreen/styles/velvet-darker"
+
+  if [[ ! -d "$src" ]]; then
+    return 0
+  fi
+
+  mkdir -p "${HOME_DIR}/KlipperScreen/styles"
+  rm -rf "$dst" 2>/dev/null || true
+  cp -a "$src" "$dst"
+  chown -R "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
+  CONFIG_CHANGED=1
+}
+
+# ------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------
+
+echo "[1/8] Preparing directories..."
+mkdir -p "$GCODE_ROOT" "$USB_DIR"
+mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
+sudo mkdir -p "$MOUNT_POINT"
+
+echo "[2/8] Syncing shaper-compact repository..."
+sync_self_repo
+set_repo_filemode_false "$REPO_DIR"
+
+SRC_DIR="${REPO_DIR}/configs"
+if [[ ! -d "$SRC_DIR" ]]; then
+  echo "Missing directory in repo: ${SRC_DIR}" >&2
+  exit 1
+fi
+
+echo "[3/8] Loading and validating versions.env..."
+load_versions_env
+validate_versions_env
+
+# Defaults if missing from versions.env
+KLIPPER_DIR="${KLIPPER_DIR:-/home/${USER_NAME}/klipper}"
+MOONRAKER_DIR="${MOONRAKER_DIR:-/home/${USER_NAME}/moonraker}"
+CROWSNEST_DIR="${CROWSNEST_DIR:-/home/${USER_NAME}/crowsnest}"
+KSCREEN_DIR="${KSCREEN_DIR:-/home/${USER_NAME}/KlipperScreen}"
+MAINSAIL_DIR="${MAINSAIL_DIR:-/home/${USER_NAME}/mainsail}"
+
+echo "[4/8] Ensuring and pinning required software..."
+# Origins/branches: keep hardcoded to official upstreams (no fork needed)
+ensure_and_pin_repo "Klipper"       "$KLIPPER_DIR"   "https://github.com/Klipper3d/klipper.git"          "master" "${KLIPPER_REF:-}"
+ensure_and_pin_repo "Moonraker"     "$MOONRAKER_DIR" "https://github.com/Arksine/moonraker.git"          "master" "${MOONRAKER_REF:-}"
+ensure_and_pin_repo "Crowsnest"     "$CROWSNEST_DIR" "https://github.com/mainsail-crew/crowsnest.git"    "master" "${CROWSNEST_REF:-}"
+ensure_and_pin_repo "KlipperScreen" "$KSCREEN_DIR"   "https://github.com/KlipperScreen/KlipperScreen.git" "master" "${KSCREEN_REF:-}"
+
+# If KlipperScreen wasn't present on a fresh MainsailOS, best-effort service/venv
+ensure_klipperscreen_service_best_effort
+
+echo "[5/8] Deploying configuration files..."
+require_file() {
+  local f="$1"
+  if [[ ! -f "${SRC_DIR}/${f}" ]]; then
+    echo "Missing file in repo: ${SRC_DIR}/${f}" >&2
+    exit 1
+  fi
+}
+
 ROOT_FILES=(
   "printer.cfg"
   "crowsnest.conf"
@@ -395,7 +538,6 @@ ROOT_FILES=(
   "KlipperScreen.conf"
   "moonraker.conf"
 )
-
 CONFIGS_FILES=(
   "macros.cfg"
   "setup.cfg"
@@ -403,7 +545,6 @@ CONFIGS_FILES=(
 
 for f in "${ROOT_FILES[@]}"; do
   require_file "$f"
-
   if [[ "$f" == "moonraker.conf" ]]; then
     tmp="$(mktemp)"
     render_moonraker_conf "${SRC_DIR}/${f}" "$tmp"
@@ -421,30 +562,25 @@ done
 
 apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 
-# Deploy Mainsail theme (.theme) without backups (replace contents)
-deploy_mainsail_theme
-
-# Deploy KlipperScreen theme without backups (replace contents)
-deploy_klipperscreen_theme
-
-# ------------------------------------------------------------
-# Step 3: Moonraker update integration (update button -> update.sh)
-# ------------------------------------------------------------
-echo "[3/7] Installing shaper_compact service and Moonraker allowlist..."
+echo "[6/8] Installing Moonraker update integration..."
 install_shaper_compact_service
 ensure_moonraker_allowed_service
 sudo rm -f "${CONFIG_ROOT}/moonraker.asvc" 2>/dev/null || true
 
-# ------------------------------------------------------------
-# Step 4: Cleanup and USB service reset
-# ------------------------------------------------------------
-echo "[4/7] Cleaning gcodes root and resetting USB services..."
+echo "[7/8] Deploying themes..."
+deploy_mainsail_theme
+deploy_klipperscreen_theme
 
+echo "[8/8] Installing USB handler + exFAT + udev/systemd..."
+sudo apt-get update
+sudo apt-get install -y exfat-fuse exfatprogs
+
+# stop old instances, cleanup
 sudo systemctl stop "usb-gcode@*.service" 2>/dev/null || true
 sudo systemctl reset-failed 2>/dev/null || true
-
 sudo umount "$MOUNT_POINT" 2>/dev/null || true
 
+# cleanup gcodes root (keep USB dir)
 while read -r dev on target type fstype rest; do
   if [[ "$target" == "$GCODE_ROOT"* ]]; then
     sudo umount "$target" 2>/dev/null || true
@@ -454,18 +590,6 @@ done < <(mount | awk '{print $1, $2, $3, $4, $5, $6}')
 find "$GCODE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "USB" -exec rm -rf {} + 2>/dev/null || true
 find "$GCODE_ROOT" -mindepth 1 -maxdepth 1 -type f -exec rm -f {} + 2>/dev/null || true
 rm -f "$USB_DIR"/* 2>/dev/null || true
-
-# ------------------------------------------------------------
-# Step 5: Ensure exFAT support
-# ------------------------------------------------------------
-echo "[5/7] Installing exFAT support..."
-sudo apt-get update
-sudo apt-get install -y exfat-fuse exfatprogs
-
-# ------------------------------------------------------------
-# Step 6: Install usb-gcode handler + systemd + udev
-# ------------------------------------------------------------
-echo "[6/7] Installing USB handler, systemd unit, and udev rules..."
 
 USB_GCODE_SH_CONTENT=$(cat <<EOF
 #!/usr/bin/env bash
@@ -507,7 +631,6 @@ case "\$ACTION" in
 esac
 EOF
 )
-
 write_file_sudo "/usr/local/bin/usb-gcode.sh" "$USB_GCODE_SH_CONTENT"
 sudo chmod +x /usr/local/bin/usb-gcode.sh
 
@@ -539,25 +662,27 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 
 # ------------------------------------------------------------
-# Step 7: Restart services
+# Restart
 # ------------------------------------------------------------
-echo "[7/7] Finalizing..."
+echo
+echo "Finalizing..."
 
 # Always restart KlipperScreen to refresh UI/themes
 echo "Restarting KlipperScreen (UI refresh)..."
 sudo systemctl restart KlipperScreen 2>/dev/null || true
 
 if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
-  echo "Configuration changed. Restarting core services..."
+  echo "Configuration/themes changed. Restarting core services..."
   sudo systemctl restart klipper 2>/dev/null || true
   sudo systemctl restart moonraker 2>/dev/null || true
   sudo systemctl restart crowsnest 2>/dev/null || true
   sudo systemctl restart nginx 2>/dev/null || true
 fi
 
-
 echo
 echo "Installation completed."
+echo
+echo "Pins enforced from: ${REPO_DIR}/versions.env"
 echo
 echo "USB test:"
 echo "  1) Insert a FAT32 or exFAT USB drive with *.gcode files in the root directory"
