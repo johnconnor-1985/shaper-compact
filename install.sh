@@ -30,7 +30,10 @@ set -euo pipefail
 #  4) Mainsail theme deployment:
 #     - Copy repo ./configs/Mainsail/* to <printer_data>/config/.theme/
 #     - No backups for .theme; existing contents are replaced.
-#  5) Restart:
+#  5) KlipperScreen theme deployment:
+#     - Copy repo ./configs/KlipperScreen/velvet-darker to ~/KlipperScreen/styles/velvet-darker
+#     - No backups for the theme; existing contents are replaced.
+#  6) Restart:
 #     - If any config file changed, restart related services at the end.
 # ------------------------------------------------------------
 
@@ -183,7 +186,6 @@ EOF
 
 ensure_moonraker_allowed_service() {
   # moonraker.asvc is a newline list of allowed service names.
-  # Ensure "shaper_compact" is present; backup only if file existed and changes.
   local tmp
   tmp="$(mktemp)"
 
@@ -205,6 +207,7 @@ ensure_moonraker_allowed_service() {
     return 0
   fi
 
+  # Backup intentionally kept for this file (behavior unchanged)
   if [[ -f "$MOONRAKER_ASVC" ]]; then
     cp -a "$MOONRAKER_ASVC" "${BACKUP_DIR}/moonraker.asvc.bak-$(timestamp)"
   fi
@@ -226,15 +229,27 @@ deploy_mainsail_theme() {
     return 0
   fi
 
-  # If source is empty, do nothing
-  if ! find "$src_theme" -maxdepth 1 -type f 1>/dev/null 2>&1; then
-    return 0
-  fi
-
   rm -rf "$THEME_DIR" 2>/dev/null || true
   mkdir -p "$THEME_DIR"
   cp -a "$src_theme"/. "$THEME_DIR"/
   chown -R "${USER_NAME}:${USER_NAME}" "$THEME_DIR" 2>/dev/null || true
+  CONFIG_CHANGED=1
+}
+
+deploy_klipperscreen_theme() {
+  # Copy repo configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker
+  # No backups. Existing contents are replaced.
+  local src="${SRC_DIR}/KlipperScreen/velvet-darker"
+  local dst="${HOME_DIR}/KlipperScreen/styles/velvet-darker"
+
+  if [[ ! -d "$src" ]]; then
+    return 0
+  fi
+
+  mkdir -p "${HOME_DIR}/KlipperScreen/styles"
+  rm -rf "$dst" 2>/dev/null || true
+  cp -a "$src" "$dst"
+  chown -R "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
   CONFIG_CHANGED=1
 }
 
@@ -409,6 +424,9 @@ apply_printer_cfg_serials_best_effort "${CONFIG_ROOT}/printer.cfg"
 # Deploy Mainsail theme (.theme) without backups (replace contents)
 deploy_mainsail_theme
 
+# Deploy KlipperScreen theme without backups (replace contents)
+deploy_klipperscreen_theme
+
 # ------------------------------------------------------------
 # Step 3: Moonraker update integration (update button -> update.sh)
 # ------------------------------------------------------------
@@ -549,6 +567,9 @@ echo "  - Moonraker allowlist updated: ${MOONRAKER_ASVC}"
 echo
 echo "Mainsail theme deployed to:"
 echo "  ${THEME_DIR}/ (replaced; no backups)"
+echo
+echo "KlipperScreen theme deployed to:"
+echo "  ${HOME_DIR}/KlipperScreen/styles/velvet-darker (replaced; no backups)"
 echo
 echo "Config deployed to:"
 echo "  ${CONFIG_ROOT}/ (printer.cfg, mainsail.cfg, crowsnest.conf, KlipperScreen.conf, moonraker.conf)"
