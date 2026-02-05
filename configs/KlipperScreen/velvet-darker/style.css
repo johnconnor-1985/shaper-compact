@@ -5,7 +5,7 @@
 @define-color color_4 #9E9E9E;
 @define-color color_5 #121212;
 @define-color background-color_2 #1c1c1c;
-@define-color background-color_3 #424242;
+@define-color background-color_3 transparent;
 @define-color background-color_4 #252525;
 @define-color background-color_5 #2f5631;
 @define-color background-color_6 #006064;
@@ -43,7 +43,7 @@ window {
 }
 
 button {
-    background-color: #121212;
+    background-color: transparent;
 }
 
 button:active {
@@ -151,7 +151,7 @@ textview .time {
 }
 
 .active_device {
-    background-color: #1c1c1c;
+    background-color: transparent;
 }
 
 .dialog {
@@ -224,7 +224,7 @@ textview .time {
 
 .numpad_key {
     border-color: #545454;
-    background-color: #252525;
+    background-color: #4a4a4a;
 }
 
 .printing-status {
@@ -236,7 +236,7 @@ textview .time {
 }
 
 .printing-status-label {
-    color: #9E9E9E;
+    color: #4a4a4a;
 }
 
 .message {
@@ -246,10 +246,10 @@ textview .time {
 }
 
 .message button {
-    background-color: #e2e2e2;
+    background-color: #4a4a4a;
     color: #121212;
 }
 
 .keyboard_pad {
-    background-color: #090909;
+    background-color: #4a4a4a;
 }
