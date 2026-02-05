@@ -193,6 +193,9 @@ ensure_moonraker_allowed_service() {
   } | sed '/^[[:space:]]*$/d' | sort | uniq > "${tmp}.new"
 
   if [[ -f "$MOONRAKER_ASVC" ]] && cmp -s "${tmp}.new" "$MOONRAKER_ASVC"; then
+    # Ensure lock-down even if already correct
+    sudo chown root:root "$MOONRAKER_ASVC" 2>/dev/null || true
+    sudo chmod 444 "$MOONRAKER_ASVC" 2>/dev/null || true
     rm -f "$tmp" "${tmp}.new"
     return 0
   fi
