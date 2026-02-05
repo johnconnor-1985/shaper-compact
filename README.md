@@ -14,6 +14,5 @@ else
   git fetch origin
   git reset --hard origin/main
 fi && \
-chmod +x install.sh && \
-./install.sh
+bash install.sh
 ```
