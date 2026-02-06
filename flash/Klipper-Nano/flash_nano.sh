@@ -1,66 +1,56 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+# ---- CONFIG ----
 
-# Klipper installation directory (default: ~/klipper)
-KLIPPER_DIR="${KLIPPER_DIR:-$HOME/klipper}"
+KLIPPER_DIR="$HOME/klipper"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+NANO_CONFIG="$SCRIPT_DIR/nano_atmega328p_16mhz_250k.config"
 
-# Only detect CH340/CH341 USB serial devices (Arduino Nano clones)
-SERIAL_BY_ID_DIR="/dev/serial/by-id"
-PORT_GLOB="$SERIAL_BY_ID_DIR/usb-1a86_*"
+PORT_GLOB="/dev/serial/by-id/usb-1a86_*"
 
-# Directory where this script is located (handles spaces in path)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ---- CHECK KLIPPER ----
 
-# Nano firmware config stored next to this script
-NANO_CONFIG="${NANO_CONFIG:-$SCRIPT_DIR/nano_atmega328p_16mhz_250k.config}"
+if [ ! -d "$KLIPPER_DIR" ]; then
+  echo "ERROR: Klipper not found in $KLIPPER_DIR"
+  exit 1
+fi
 
-# Skip "make clean" if set to 1
-SKIP_CLEAN="${SKIP_CLEAN:-0}"
+# ---- CHECK CONFIG ----
 
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
+if [ ! -f "$NANO_CONFIG" ]; then
+  echo "ERROR: Config file not found:"
+  echo "$NANO_CONFIG"
+  exit 1
+fi
 
-# Ensure required command exists
-need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || {
-    echo "Error: required command '$1' not found."
-    exit 1
-  }
-}
+# ---- DETECT NANO PORT ----
 
-# Check if Klipper system service exists
-have_klipper_service() {
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl list-unit-files | grep -q "^klipper\.service" && return 0 || return 1
-  else
-    service --status-all 2>/dev/null | grep -q "klipper" && return 0 || return 1
-  fi
-}
+PORTS=( $PORT_GLOB )
 
-# Stop Klipper service if present
-stop_klipper_if_present() {
-  if have_klipper_service; then
-    echo "==> Stopping Klipper service"
-    if command -v systemctl >/dev/null 2>&1; then
-      sudo systemctl stop klipper
-    else
-      sudo service klipper stop
-    fi
-  else
-    echo "==> Klipper service not found (skipping stop/start)"
-  fi
-}
+if [ ${#PORTS[@]} -eq 0 ]; then
+  echo "ERROR: No Arduino Nano detected."
+  echo "Plug it in and try again."
+  exit 1
+fi
 
-# Start Klipper service if present
-start_klipper_if_present() {
-  if have_klipper_service; then
-    echo "==> Starting Klipper service"
-    if command -v systemctl >/dev/null 2>&1; then
-      sudo systemctl start klipper
-    else
-      sudo servic
+if [ ${#PORTS[@]} -gt 1 ]; then
+  echo "ERROR: Multiple Nano devices detected:"
+  for p in "${PORTS[@]}"; do
+    echo "  $p"
+  done
+  echo "Disconnect extras and retry."
+  exit 1
+fi
+
+PORT="${PORTS[0]}"
+
+echo "Nano detected at:"
+echo "  $PORT"
+
+# ---- BUILD ----
+
+cd "$KLIPPER_DIR"
+
+echo "Copying config..."
+cp "
