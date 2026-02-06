@@ -1,6 +1,7 @@
 Klipper flash script for Arduino Nano based on CH340.
 
-Launch from SSH:
+Connect your Nano to Raspberry, unconnect any other USB device,
+launch from SSH:
 
 ```bash
 cd ~ && \
