@@ -9,5 +9,5 @@ cd ~ && \
 cd shaper-compact && \
 git fetch origin && \
 git reset --hard origin/main && \
-./flash/"Kipper Nano"/flash_nano.sh
+./flash/"Kipper-Nano"/flash_nano.sh
 ```
