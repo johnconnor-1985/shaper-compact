@@ -1,3 +1,4 @@
+cat > "flash/Klipper-Nano/flash_nano.sh" <<'EOF'
 #!/usr/bin/env bash
 set -e
 
@@ -53,4 +54,33 @@ echo "  $PORT"
 cd "$KLIPPER_DIR"
 
 echo "Copying config..."
-cp "
+cp "$NANO_CONFIG" .config
+
+echo "Cleaning build..."
+make clean
+
+echo "Building firmware..."
+make
+
+# ---- STOP KLIPPER (only if service exists) ----
+
+if systemctl list-unit-files 2>/dev/null | grep -q '^klipper\.service'; then
+  echo "Stopping Klipper..."
+  sudo systemctl stop klipper
+fi
+
+# ---- FLASH ----
+
+echo "Flashing Nano..."
+make flash FLASH_DEVICE="$PORT"
+
+# ---- START KLIPPER (only if service exists) ----
+
+if systemctl list-unit-files 2>/dev/null | grep -q '^klipper\.service'; then
+  echo "Starting Klipper..."
+  sudo systemctl start klipper
+fi
+
+echo ""
+echo "✅ Flash complete."
+EOF
