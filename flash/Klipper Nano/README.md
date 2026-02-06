@@ -1,4 +1,4 @@
-Klipper flash script for Arduino Nano based on CH30
+Klipper flash script for Arduino Nano based on CH340.
 
 Launch from SSH:
 
