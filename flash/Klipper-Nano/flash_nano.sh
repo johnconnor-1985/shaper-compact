@@ -1,4 +1,3 @@
-cat > flash/Klipper-Nano/flash_nano.sh <<'EOF'
 #!/usr/bin/env bash
 set -e
 
@@ -22,22 +21,30 @@ if [ ! -f "$NANO_CONFIG" ]; then
 fi
 
 # ---- DETECT NANO PORT (strict) ----
+shopt -s nullglob
 PORTS=( $PORT_GLOB )
+shopt -u nullglob
 
 if [ "${#PORTS[@]}" -eq 0 ]; then
-  echo "ERROR: No CH340 device found ($PORT_GLOB). Plug the Nano and retry."
+  echo "ERROR: No CH340 device found ($PORT_GLOB)."
+  echo "TIP: run: ls -l /dev/serial/by-id/"
   exit 1
 fi
 
 if [ "${#PORTS[@]}" -gt 1 ]; then
   echo "ERROR: Multiple CH340 devices detected. Disconnect extras:"
-  for p in "${PORTS[@]}"; do
-    echo "  $p"
-  done
+  for p in "${PORTS[@]}"; do echo "  $p"; done
   exit 1
 fi
 
 PORT="${PORTS[0]}"
+
+# Extra safety: the resolved path must exist
+if [ ! -e "$PORT" ]; then
+  echo "ERROR: Detected port does not exist: $PORT"
+  echo "TIP: run: ls -l /dev/serial/by-id/"
+  exit 1
+fi
 
 echo "==> Nano detected at: $PORT"
 echo "==> Using config:     $NANO_CONFIG"
@@ -74,4 +81,3 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^klipper\.service'; then
 fi
 
 echo "✅ Flash complete."
-EOF
