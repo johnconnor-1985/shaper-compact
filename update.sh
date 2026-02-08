@@ -20,6 +20,7 @@ set -euo pipefail
 # Deploys UI customizations (NO backup, hard replace):
 #   - Mainsail:      ./configs/Mainsail/* -> <printer_data>/config/.theme/
 #   - KlipperScreen: ./configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker
+#   - Patch KlipperScreen theme CSS placeholders (e.g. %USER%) to absolute path
 #
 # Backups:
 #   - Only if destination existed and differed
@@ -459,6 +460,26 @@ EOF
   echo "✅ [KlipperScreen] UI OK"
 }
 
+# ------------------------------------------------------------
+# Patch KlipperScreen theme CSS paths
+# ------------------------------------------------------------
+patch_klipperscreen_theme_paths() {
+  local css="${HOME_DIR}/KlipperScreen/styles/velvet-darker/style.css"
+
+  if [[ ! -f "$css" ]]; then
+    echo "[KlipperScreen] style.css not found (skip patch): $css"
+    return 0
+  fi
+
+  echo "[KlipperScreen] patching theme CSS paths in: $css"
+
+  # Replace %USER% placeholder (your current choice)
+  sed -i "s|%USER%|${USER_NAME}|g" "$css"
+
+  # Normalize any hardcoded /home/<someone>/... to current user
+  sed -i "s|/home/[^/]\+/KlipperScreen/styles/velvet-darker/|/home/${USER_NAME}/KlipperScreen/styles/velvet-darker/|g" "$css"
+}
+
 # -------------------------------
 # UI customization deployment
 # -------------------------------
@@ -506,6 +527,9 @@ deploy_ui_customizations() {
   local kscreen_styles_dir="${KSCREEN_DIR:-/home/${USER_NAME}/KlipperScreen}/styles"
   local kscreen_dst="${kscreen_styles_dir}/velvet-darker"
   deploy_dir_replace "$kscreen_src" "$kscreen_dst" "KlipperScreen theme (velvet-darker)"
+
+  # Patch CSS after deploy so the deployed file is always correct
+  patch_klipperscreen_theme_paths
 }
 
 rollback() {
@@ -624,7 +648,7 @@ for f in "${CONFIGS_FILES[@]}"; do
   deploy_file "$src" "$dst"
 done
 
-# Deploy UI customizations (NO BACKUP, hard replace)
+# Deploy UI customizations (NO BACKUP, hard replace) + CSS patch
 deploy_ui_customizations
 
 # Allow Moonraker to manage shaper_compact service (no backup)
@@ -642,6 +666,9 @@ git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
 # ------------------------------------------------------------
 echo
 echo "[4/4] Finalizing..."
+
+# One last safety patch (in case user manually edited between deploy and now)
+patch_klipperscreen_theme_paths
 
 if [[ "$CHANGED" -eq 1 ]]; then
   if [[ "$CHECK_ONLY" == "true" ]]; then
