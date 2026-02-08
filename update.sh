@@ -32,9 +32,12 @@ set -euo pipefail
 #       * config files to their previous state (using backups created this run)
 #   - NOTE: UI custom dirs are "no backup"; rollback does not revert them.
 #
-# Mainsail header label:
+# Mainsail header label + branding:
 #   - Force Mainsail Settings -> General -> Printer Name to a single space (" ")
 #     via Moonraker DB so it shows nothing next to the logo.
+#   - Force Mainsail uiSettings colors:
+#       logo    = "#951DF0"
+#       primary = "#D834E4"
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-update.log"
@@ -204,7 +207,6 @@ render_moonraker_conf_to_tmp() {
   tmp="$(mktemp)"
   cp -a "$src" "$tmp"
 
-  # Replace placeholders if present
   if [[ -n "${KLIPPER_REF:-}" ]]; then
     sed -i "s|_KLIPPER_PINNED_VERSION_|${KLIPPER_REF}|g" "$tmp"
   fi
@@ -216,10 +218,7 @@ render_moonraker_conf_to_tmp() {
 }
 
 ensure_moonraker_allowed_service() {
-  # Ensure Moonraker can manage shaper_compact service via allowlist.
-  # No backup desired for moonraker.asvc.
   local service_name="shaper_compact"
-
   local tmp
   tmp="$(mktemp)"
 
@@ -249,7 +248,6 @@ ensure_moonraker_allowed_service() {
     fi
   fi
 
-  # Remove any stray duplicate under config/ (no backup)
   sudo rm -f "${CONFIG_ROOT}/moonraker.asvc" 2>/dev/null || true
 }
 
@@ -268,7 +266,6 @@ git_enforce_ref() {
   fi
 
   save_git_state "$dir"
-
   git -C "$dir" fetch --all --prune >/dev/null 2>&1 || true
 
   local current
@@ -292,7 +289,6 @@ git_enforce_ref() {
 }
 
 system_best_effort_update() {
-  # Not rollbackable.
   if [[ "$SYSTEM_UPDATE" != "true" ]]; then
     echo "System update disabled."
     return 0
@@ -310,7 +306,6 @@ system_best_effort_update() {
 }
 
 restart_services() {
-  # Keep conservative. Do not fail on restart errors.
   local -a services=( klipper moonraker KlipperScreen crowsnest nginx )
   local s
   for s in "${services[@]}"; do
@@ -319,19 +314,15 @@ restart_services() {
 }
 
 # ------------------------------------------------------------
-# Mainsail printer name (hide label next to logo)
+# Mainsail header label + branding (best-effort)
 # ------------------------------------------------------------
-set_mainsail_printername_space() {
-  # Force Mainsail Settings -> General -> Printer Name to a single space (" ")
-  # so Mainsail displays nothing next to the logo (no hostname).
+set_mainsail_ui_branding() {
   local url="http://127.0.0.1:7125"
 
-  # In CHECK_ONLY mode: no side effects
   if [[ "$CHECK_ONLY" == "true" ]]; then
     return 0
   fi
 
-  # Wait for Moonraker to be up (handles restarts during update)
   for _ in {1..30}; do
     if curl -fsS "${url}/server/info" >/dev/null 2>&1; then
       break
@@ -339,10 +330,16 @@ set_mainsail_printername_space() {
     sleep 0.5
   done
 
-  # Best-effort only: do not fail update if DB write fails
+  # Hide printer label
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
     -d '{"namespace":"mainsail","key":"general","value":{"printername":" "}}' \
+    >/dev/null 2>&1 || true
+
+  # Force UI colors deterministically (no jq dependency)
+  curl -fsS -X POST "${url}/server/database/item" \
+    -H "Content-Type: application/json" \
+    -d '{"namespace":"mainsail","key":"uiSettings","value":{"logo":"#951DF0","primary":"#D834E4","theme":"mainsail"}}' \
     >/dev/null 2>&1 || true
 }
 
@@ -381,7 +378,6 @@ ensure_klipperscreen_x11_stack() {
       >/dev/null 2>&1 || true
   fi
 
-  # Ensure venv exists
   if [[ ! -d "$venv_dir" ]]; then
     if [[ "$CHECK_ONLY" == "true" ]]; then
       echo "Would create venv: $venv_dir"
@@ -448,7 +444,6 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable KlipperScreen >/dev/null 2>&1 || true
 
-  # Cleanup old instances to avoid duplicates/conflicts on :0
   sudo systemctl stop KlipperScreen 2>/dev/null || true
   sudo pkill -f "${ks_dir}/screen.py" 2>/dev/null || true
   sudo pkill -f "xinit.*${ks_dir}/screen.py" 2>/dev/null || true
@@ -457,7 +452,6 @@ EOF
 
   sudo systemctl restart KlipperScreen
 
-  # Smoke test
   local ok=0
   for _ in {1..20}; do
     if [[ -S /tmp/.X11-unix/X0 ]] && pgrep -f "${ks_dir}/screen.py" >/dev/null 2>&1; then
@@ -501,8 +495,6 @@ patch_klipperscreen_theme_paths() {
 # -------------------------------
 
 deploy_dir_replace() {
-  # Hard replace directory (no backups):
-  #   deploy_dir_replace <src_dir> <dst_dir> <label>
   local src="$1"
   local dst="$2"
   local label="${3:-dir}"
@@ -581,10 +573,7 @@ on_error() {
 }
 trap on_error ERR
 
-# Prevent "dirty" status due to executable bit changes on embedded systems
 git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
-
-# ✅ Include THIS repo (shaper-compact) in rollback, so Update Manager stays "update available" on failure
 save_git_state "${REPO_DIR}"
 
 echo "Shaper Compact Update"
@@ -685,8 +674,8 @@ else
   echo "No changes detected."
 fi
 
-# Always enforce hidden Mainsail header label (best-effort)
-set_mainsail_printername_space
+# Always enforce Mainsail header + branding (best-effort)
+set_mainsail_ui_branding
 
 echo
 echo "Update completed."
