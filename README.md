@@ -13,4 +13,4 @@ git reset --hard origin/main && \
 bash install.sh
 ```
 
-Please launch the Updater only from Updated Manager in Maisail/KlipperScreen
+Please launch the Updater only from Update Manager in Mainsail/KlipperScreen
