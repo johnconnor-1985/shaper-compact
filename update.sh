@@ -31,6 +31,10 @@ set -euo pipefail
 #       * git repos to their previous HEAD (INCLUDING this repo shaper-compact)
 #       * config files to their previous state (using backups created this run)
 #   - NOTE: UI custom dirs are "no backup"; rollback does not revert them.
+#
+# Mainsail header label:
+#   - Force Mainsail Settings -> General -> Printer Name to a single space (" ")
+#     via Moonraker DB so it shows nothing next to the logo.
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-update.log"
@@ -61,6 +65,7 @@ need_cmd cp
 need_cmd mkdir
 need_cmd ps
 need_cmd pgrep
+need_cmd curl   # <-- added
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
@@ -314,6 +319,34 @@ restart_services() {
 }
 
 # ------------------------------------------------------------
+# Mainsail printer name (hide label next to logo)
+# ------------------------------------------------------------
+set_mainsail_printername_space() {
+  # Force Mainsail Settings -> General -> Printer Name to a single space (" ")
+  # so Mainsail displays nothing next to the logo (no hostname).
+  local url="http://127.0.0.1:7125"
+
+  # In CHECK_ONLY mode: no side effects
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    return 0
+  fi
+
+  # Wait for Moonraker to be up (handles restarts during update)
+  for _ in {1..30}; do
+    if curl -fsS "${url}/server/info" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+
+  # Best-effort only: do not fail update if DB write fails
+  curl -fsS -X POST "${url}/server/database/item" \
+    -H "Content-Type: application/json" \
+    -d '{"namespace":"mainsail","key":"general","value":{"printername":" "}}' \
+    >/dev/null 2>&1 || true
+}
+
+# ------------------------------------------------------------
 # KlipperScreen GOLDEN X11 stack enforcement (service + launcher)
 # ------------------------------------------------------------
 
@@ -551,7 +584,7 @@ trap on_error ERR
 # Prevent "dirty" status due to executable bit changes on embedded systems
 git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
 
-# ✅ NEW: include THIS repo (shaper-compact) in rollback, so Update Manager stays "update available" on failure
+# ✅ Include THIS repo (shaper-compact) in rollback, so Update Manager stays "update available" on failure
 save_git_state "${REPO_DIR}"
 
 echo "Shaper Compact Update"
@@ -651,6 +684,9 @@ if [[ "$CHANGED" -eq 1 ]]; then
 else
   echo "No changes detected."
 fi
+
+# Always enforce hidden Mainsail header label (best-effort)
+set_mainsail_printername_space
 
 echo
 echo "Update completed."
