@@ -35,9 +35,7 @@ set -euo pipefail
 # Mainsail header label + branding:
 #   - Force Mainsail Settings -> General -> Printer Name to a single space (" ")
 #     via Moonraker DB so it shows nothing next to the logo.
-#   - Force Mainsail uiSettings colors:
-#       logo    = "#951DF0"
-#       primary = "#D834E4"
+#   - Force Mainsail uiSettings colors (from configs/Mainsail/customization.env)
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-update.log"
@@ -114,6 +112,41 @@ mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
 # Flags
 CHECK_ONLY="${CHECK_ONLY:-false}"            # "true" = no changes, only report
 SYSTEM_UPDATE="${SYSTEM_UPDATE:-false}"      # "true" = apt-get upgrade (NOT rollbackable)
+
+# ------------------------------------------------------------
+# Mainsail customization.env (Moonraker DB)
+# ------------------------------------------------------------
+load_mainsail_customization_env() {
+  local cf="${REPO_DIR}/configs/Mainsail/customization.env"
+
+  # Defaults (used if file missing or variables omitted)
+  MAINSAIL_PRINTERNAME="${MAINSAIL_PRINTERNAME:-" "}"
+  MAINSAIL_UI_LOGO="${MAINSAIL_UI_LOGO:-"#951DF0"}"
+  MAINSAIL_UI_PRIMARY="${MAINSAIL_UI_PRIMARY:-"#D834E4"}"
+  MAINSAIL_UI_THEME="${MAINSAIL_UI_THEME:-"mainsail"}"
+
+  if [[ -f "$cf" ]]; then
+    echo "[Mainsail] loading customization from: $cf"
+    # shellcheck disable=SC1090
+    source "$cf"
+  else
+    echo "[Mainsail] customization.env not found (using defaults): $cf"
+  fi
+
+  # Ensure non-empty essentials
+  if [[ -z "${MAINSAIL_PRINTERNAME:-}" ]]; then
+    MAINSAIL_PRINTERNAME=" "
+  fi
+  if [[ -z "${MAINSAIL_UI_THEME:-}" ]]; then
+    MAINSAIL_UI_THEME="mainsail"
+  fi
+  if [[ -z "${MAINSAIL_UI_LOGO:-}" ]]; then
+    MAINSAIL_UI_LOGO="#951DF0"
+  fi
+  if [[ -z "${MAINSAIL_UI_PRIMARY:-}" ]]; then
+    MAINSAIL_UI_PRIMARY="#D834E4"
+  fi
+}
 
 # ------------------------------------------------------------
 # Rollback state
@@ -333,13 +366,13 @@ set_mainsail_ui_branding() {
   # Hide printer label
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
-    -d '{"namespace":"mainsail","key":"general","value":{"printername":" "}}' \
+    -d "{\"namespace\":\"mainsail\",\"key\":\"general\",\"value\":{\"printername\":\"${MAINSAIL_PRINTERNAME}\"}}" \
     >/dev/null 2>&1 || true
 
   # Force UI colors deterministically (no jq dependency)
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
-    -d '{"namespace":"mainsail","key":"uiSettings","value":{"logo":"#951DF0","primary":"#D834E4","theme":"mainsail"}}' \
+    -d "{\"namespace\":\"mainsail\",\"key\":\"uiSettings\",\"value\":{\"logo\":\"${MAINSAIL_UI_LOGO}\",\"primary\":\"${MAINSAIL_UI_PRIMARY}\",\"theme\":\"${MAINSAIL_UI_THEME}\"}}" \
     >/dev/null 2>&1 || true
 }
 
@@ -583,6 +616,11 @@ echo "Printer data: $PRINTER_DATA"
 echo "CHECK_ONLY: $CHECK_ONLY"
 echo "SYSTEM_UPDATE: $SYSTEM_UPDATE"
 echo
+
+# ------------------------------------------------------------
+# Load Mainsail customization.env early (for DB writes)
+# ------------------------------------------------------------
+load_mainsail_customization_env
 
 # ------------------------------------------------------------
 # 1) Enforce pinned versions (git)
