@@ -28,7 +28,7 @@ set -euo pipefail
 #
 # Rollback:
 #   - If any step fails (except system upgrade), rollback restores:
-#       * git repos to their previous HEAD
+#       * git repos to their previous HEAD (INCLUDING this repo shaper-compact)
 #       * config files to their previous state (using backups created this run)
 #   - NOTE: UI custom dirs are "no backup"; rollback does not revert them.
 # ------------------------------------------------------------
@@ -106,17 +106,6 @@ mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
 # Flags
 CHECK_ONLY="${CHECK_ONLY:-false}"            # "true" = no changes, only report
 SYSTEM_UPDATE="${SYSTEM_UPDATE:-false}"      # "true" = apt-get upgrade (NOT rollbackable)
-
-# Prevent "dirty" status due to executable bit changes on embedded systems
-git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
-
-echo "Shaper Compact Update"
-echo "Log: $LOG"
-echo "Repo: $REPO_DIR"
-echo "Printer data: $PRINTER_DATA"
-echo "CHECK_ONLY: $CHECK_ONLY"
-echo "SYSTEM_UPDATE: $SYSTEM_UPDATE"
-echo
 
 # ------------------------------------------------------------
 # Rollback state
@@ -326,9 +315,6 @@ restart_services() {
 
 # ------------------------------------------------------------
 # KlipperScreen GOLDEN X11 stack enforcement (service + launcher)
-#   - FIX: avoid oneshot that exits (causing KS to die on UI "restart")
-#   - FIX: run xinit from ks_dir so relative assets work
-#   - FIX: explicit vt7 + openvt wait (-w) + session (-s) to avoid tty perms races
 # ------------------------------------------------------------
 
 write_file_sudo() {
@@ -473,10 +459,7 @@ patch_klipperscreen_theme_paths() {
 
   echo "[KlipperScreen] patching theme CSS paths in: $css"
 
-  # Replace %USER% placeholder (your current choice)
   sed -i "s|%USER%|${USER_NAME}|g" "$css"
-
-  # Normalize any hardcoded /home/<someone>/... to current user
   sed -i "s|/home/[^/]\+/KlipperScreen/styles/velvet-darker/|/home/${USER_NAME}/KlipperScreen/styles/velvet-darker/|g" "$css"
 }
 
@@ -496,7 +479,6 @@ deploy_dir_replace() {
     return 0
   fi
 
-  # ensure src has something
   if ! find "$src" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
     echo "Skipping ${label}: source dir is empty: $src"
     return 0
@@ -509,31 +491,27 @@ deploy_dir_replace() {
   fi
 
   rm -rf "$dst" 2>/dev/null || true
-  mkdir -p "$(dirname "$dst")"
-  cp -a "$src" "$dst"
+  mkdir -p "$dst"
+  cp -a "$src"/. "$dst"/
   chown -R "${USER_NAME}:${USER_NAME}" "$dst" 2>/dev/null || true
   CHANGED=1
   echo "Replaced ${label}: $dst"
 }
 
 deploy_ui_customizations() {
-  # Mainsail .theme
   local mainsail_src="${CONFIGS_SRC_DIR}/Mainsail"
   local mainsail_dst="${CONFIG_ROOT}/.theme"
   deploy_dir_replace "$mainsail_src" "$mainsail_dst" "Mainsail theme (.theme)"
 
-  # KlipperScreen theme (velvet-darker)
   local kscreen_src="${CONFIGS_SRC_DIR}/KlipperScreen/velvet-darker"
   local kscreen_styles_dir="${KSCREEN_DIR:-/home/${USER_NAME}/KlipperScreen}/styles"
   local kscreen_dst="${kscreen_styles_dir}/velvet-darker"
   deploy_dir_replace "$kscreen_src" "$kscreen_dst" "KlipperScreen theme (velvet-darker)"
 
-  # Patch CSS after deploy so the deployed file is always correct
   patch_klipperscreen_theme_paths
 }
 
 rollback() {
-  # Restore configs (from backups created during this run) and git HEADs.
   if [[ "$ROLLBACK_IN_PROGRESS" -eq 1 ]]; then
     return 0
   fi
@@ -542,7 +520,6 @@ rollback() {
   echo
   echo "ERROR: update failed. Starting rollback..."
 
-  # Restore configs from backups (reverse order)
   local i item backup dst
   for (( i=${#CREATED_BACKUPS[@]}-1; i>=0; i-- )); do
     item="${CREATED_BACKUPS[$i]}"
@@ -554,27 +531,36 @@ rollback() {
     fi
   done
 
-  # Restore git repos
   local dir
   for dir in "${!PREV_HEAD[@]}"; do
     restore_git_state "$dir"
   done
 
-  # NOTE: UI custom dirs are "no backup"; rollback does not revert them.
-
-  # Best-effort restart after rollback
   restart_services
 
   echo "Rollback completed."
 }
 
 on_error() {
-  # Only rollback when we actually applied changes.
   if [[ "$CHECK_ONLY" != "true" ]]; then
     rollback
   fi
 }
 trap on_error ERR
+
+# Prevent "dirty" status due to executable bit changes on embedded systems
+git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
+
+# ✅ NEW: include THIS repo (shaper-compact) in rollback, so Update Manager stays "update available" on failure
+save_git_state "${REPO_DIR}"
+
+echo "Shaper Compact Update"
+echo "Log: $LOG"
+echo "Repo: $REPO_DIR"
+echo "Printer data: $PRINTER_DATA"
+echo "CHECK_ONLY: $CHECK_ONLY"
+echo "SYSTEM_UPDATE: $SYSTEM_UPDATE"
+echo
 
 # ------------------------------------------------------------
 # 1) Enforce pinned versions (git)
@@ -602,10 +588,8 @@ else
   echo "Skipping Mainsail pin: MAINSAIL_REF is empty."
 fi
 
-# System update (optional, NOT rollbackable)
 system_best_effort_update
 
-# Enforce golden KlipperScreen X11 stack (deterministic + smoke test)
 echo
 echo "[1b/4] Enforcing KlipperScreen X11 stack..."
 ensure_klipperscreen_x11_stack
@@ -616,7 +600,6 @@ ensure_klipperscreen_x11_stack
 echo
 echo "[2/4] Deploying configuration..."
 
-# Source files (must exist)
 ROOT_FILES=( "KlipperScreen.conf" "crowsnest.conf" "mainsail.cfg" "moonraker.conf" )
 CONFIGS_FILES=( "macros.cfg" "setup.cfg" )
 
@@ -627,7 +610,6 @@ for f in "${CONFIGS_FILES[@]}"; do
   [[ -f "${CONFIGS_SRC_DIR}/${f}" ]] || { echo "Missing: ${CONFIGS_SRC_DIR}/${f}" >&2; exit 1; }
 done
 
-# Deploy root files; moonraker.conf is templated
 for f in "${ROOT_FILES[@]}"; do
   src="${CONFIGS_SRC_DIR}/${f}"
   dst="${CONFIG_ROOT}/${f}"
@@ -641,33 +623,22 @@ for f in "${ROOT_FILES[@]}"; do
   fi
 done
 
-# Deploy Configs/ files
 for f in "${CONFIGS_FILES[@]}"; do
   src="${CONFIGS_SRC_DIR}/${f}"
   dst="${TARGET_CONFIGS_DIR}/${f}"
   deploy_file "$src" "$dst"
 done
 
-# Deploy UI customizations (NO BACKUP, hard replace) + CSS patch
 deploy_ui_customizations
-
-# Allow Moonraker to manage shaper_compact service (no backup)
 ensure_moonraker_allowed_service
 
-# ------------------------------------------------------------
-# 3) Final checks / hygiene
-# ------------------------------------------------------------
 echo
 echo "[3/4] Hygiene..."
 git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
 
-# ------------------------------------------------------------
-# 4) Restart services if needed
-# ------------------------------------------------------------
 echo
 echo "[4/4] Finalizing..."
 
-# One last safety patch (in case user manually edited between deploy and now)
 patch_klipperscreen_theme_paths
 
 if [[ "$CHANGED" -eq 1 ]]; then
