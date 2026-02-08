@@ -35,9 +35,12 @@ set -euo pipefail
 #       - Always enforce KlipperScreen X11 golden stack (UI refresh + smoke test)
 #       - Restart other services only if configs/themes changed
 #
-#  7) Mainsail header label:
+#  7) Mainsail header label + branding:
 #       - Force Mainsail "Printer Name" to a single space (" ") via Moonraker DB
 #         so it shows nothing next to the logo (no hostname fallback).
+#       - Force Mainsail uiSettings colors:
+#           logo    = "#951DF0"
+#           primary = "#D834E4"
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -502,7 +505,6 @@ ensure_moonraker_allowed_service() {
     return 0
   fi
 
-  # backup keep (your current behavior)
   if [[ -f "$MOONRAKER_ASVC" ]]; then
     cp -a "$MOONRAKER_ASVC" "${BACKUP_DIR}/moonraker.asvc.bak-$(timestamp)"
   fi
@@ -516,11 +518,11 @@ ensure_moonraker_allowed_service() {
 }
 
 # ------------------------------------------------------------
-# Mainsail printer name (hide label next to logo)
+# Mainsail header label + branding (best-effort)
 # ------------------------------------------------------------
-set_mainsail_printername_space() {
-  # Force Mainsail Settings -> General -> Printer Name to a single space (" ")
-  # so Mainsail displays nothing next to the logo (no hostname).
+set_mainsail_ui_branding() {
+  # - Hide printer label: general.printername = " "
+  # - Set uiSettings colors: logo + primary (and keep theme="mainsail")
   local url="http://127.0.0.1:7125"
 
   # Wait for Moonraker to be up (handles restarts during install)
@@ -531,10 +533,17 @@ set_mainsail_printername_space() {
     sleep 0.5
   done
 
-  # Best-effort only: do not fail installer if it can't be set
+  # Hide printer label
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
     -d '{"namespace":"mainsail","key":"general","value":{"printername":" "}}' \
+    >/dev/null 2>&1 || true
+
+  # Force UI colors deterministically (no jq dependency).
+  # NOTE: this overwrites uiSettings as a whole; we include theme so it remains stable.
+  curl -fsS -X POST "${url}/server/database/item" \
+    -H "Content-Type: application/json" \
+    -d '{"namespace":"mainsail","key":"uiSettings","value":{"logo":"#951DF0","primary":"#D834E4","theme":"mainsail"}}' \
     >/dev/null 2>&1 || true
 }
 
@@ -579,10 +588,7 @@ patch_klipperscreen_theme_paths() {
 
   echo "[KlipperScreen] patching theme CSS paths in: $css"
 
-  # Replace %USER% placeholder
   sed -i "s|%USER%|${USER_NAME}|g" "$css"
-
-  # Normalize any previously hardcoded username in absolute paths
   sed -i "s|/home/[^/]\+/KlipperScreen/styles/velvet-darker/|/home/${USER_NAME}/KlipperScreen/styles/velvet-darker/|g" "$css"
 }
 
@@ -617,7 +623,6 @@ KSCREEN_DIR="${KSCREEN_DIR:-/home/${USER_NAME}/KlipperScreen}"
 MAINSAIL_DIR="${MAINSAIL_DIR:-/home/${USER_NAME}/mainsail}"
 
 echo "[4/8] Ensuring and pinning required software..."
-# Origins/branches: keep hardcoded to official upstreams (no fork needed)
 ensure_and_pin_repo "Klipper"       "$KLIPPER_DIR"   "https://github.com/Klipper3d/klipper.git"             "master" "${KLIPPER_REF:-}"
 ensure_and_pin_repo "Moonraker"     "$MOONRAKER_DIR" "https://github.com/Arksine/moonraker.git"            "master" "${MOONRAKER_REF:-}"
 ensure_and_pin_repo "Crowsnest"     "$CROWSNEST_DIR" "https://github.com/mainsail-crew/crowsnest.git"      "master" "${CROWSNEST_REF:-}"
@@ -677,12 +682,10 @@ echo "[8/8] Installing USB handler + exFAT + udev/systemd..."
 sudo apt-get update
 sudo apt-get install -y exfat-fuse exfatprogs
 
-# stop old instances, cleanup
 sudo systemctl stop "usb-gcode@*.service" 2>/dev/null || true
 sudo systemctl reset-failed 2>/dev/null || true
 sudo umount "$MOUNT_POINT" 2>/dev/null || true
 
-# cleanup gcodes root (keep USB dir)
 while read -r dev on target type fstype rest; do
   if [[ "$target" == "$GCODE_ROOT"* ]]; then
     sudo umount "$target" 2>/dev/null || true
@@ -750,7 +753,6 @@ EOF
 )
 write_file_sudo "/etc/systemd/system/usb-gcode@.service" "$USB_SERVICE_CONTENT"
 
-# Trigger only on USB block devices (prevents matching the SD-card boot partition mmcblk0p1).
 UDEV_RULES_CONTENT=$(cat <<'EOF'
 ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="vfat",  TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
 ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_BUS}=="usb", ENV{ID_FS_TYPE}=="exfat", TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-gcode@%k.service"
@@ -769,10 +771,8 @@ sudo udevadm trigger
 echo
 echo "Finalizing..."
 
-# Ensure theme CSS paths are patched (safe to run multiple times)
 patch_klipperscreen_theme_paths
 
-# Always enforce golden KlipperScreen (includes cleanup + restart + smoke test)
 echo "Ensuring KlipperScreen X11 stack (UI refresh + stability)..."
 ensure_klipperscreen_x11_stack
 
@@ -784,8 +784,8 @@ if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
   sudo systemctl restart nginx 2>/dev/null || true
 fi
 
-# Always hide the Mainsail printer label (set to " ")
-set_mainsail_printername_space
+# Always enforce Mainsail header + branding (best-effort)
+set_mainsail_ui_branding
 
 echo
 echo "Installation completed."
