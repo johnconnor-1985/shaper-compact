@@ -25,6 +25,7 @@ set -euo pipefail
 #           <printer_data>/moonraker.asvc (root:root 444)
 #  4) Themes:
 #       - Mainsail: ./configs/Mainsail/* -> <printer_data>/config/.theme/ (replace, no backup)
+#           NOTE: customization.env is NOT deployed into .theme (assets-only).
 #       - KlipperScreen: ./configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker (replace, no backup)
 #       - Patch KlipperScreen theme CSS placeholders (e.g. %USER%) to absolute path
 #  5) USB G-code workflow:
@@ -38,7 +39,7 @@ set -euo pipefail
 #  7) Mainsail header label + branding:
 #       - Force Mainsail "Printer Name" to a single space (" ") via Moonraker DB
 #         so it shows nothing next to the logo (no hostname fallback).
-#       - Force Mainsail uiSettings colors (from configs/Mainsail/customization.env)
+#       - Force Mainsail uiSettings colors (read from repo configs/Mainsail/customization.env only)
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -113,7 +114,7 @@ need_cmd cp
 need_cmd mkdir
 need_cmd ps
 need_cmd pgrep
-need_cmd curl     # <-- added
+need_cmd curl
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -190,7 +191,6 @@ load_versions_env() {
 }
 
 validate_versions_env() {
-  # required pins (you can relax these if you want)
   for v in KLIPPER_REF MOONRAKER_REF KSCREEN_REF CROWSNEST_REF; do
     local val="${!v:-}"
     if [[ -n "$val" ]] && ! is_hex40 "$val"; then
@@ -201,7 +201,9 @@ validate_versions_env() {
 }
 
 # ------------------------------------------------------------
-# customization.env (Mainsail UI customization)
+# customization.env (Mainsail UI customization) - READ ONLY
+#  - Keep file in repo: configs/Mainsail/customization.env
+#  - DO NOT deploy it into .theme (assets-only).
 # ------------------------------------------------------------
 load_mainsail_customization_env() {
   local cf="${REPO_DIR}/configs/Mainsail/customization.env"
@@ -213,7 +215,7 @@ load_mainsail_customization_env() {
   MAINSAIL_UI_THEME="${MAINSAIL_UI_THEME:-"mainsail"}"
 
   if [[ -f "$cf" ]]; then
-    echo "[Mainsail] loading customization from: $cf"
+    echo "[Mainsail] loading customization from repo (not deployed): $cf"
     # shellcheck disable=SC1090
     source "$cf"
   else
@@ -300,7 +302,6 @@ ensure_klipperscreen_x11_stack() {
     libgtk-3-0 gir1.2-gtk-3.0 python3-venv python3-pip python3-dev \
     >/dev/null 2>&1 || true
 
-  # Ensure venv exists (deterministic)
   if [[ ! -d "$venv_dir" ]]; then
     echo "[KlipperScreen] creating venv: $venv_dir"
     python3 -m venv "$venv_dir"
@@ -349,7 +350,6 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable KlipperScreen >/dev/null 2>&1 || true
 
-  # Cleanup old instances to avoid duplicates/conflicts on :0
   echo "[KlipperScreen] stopping/cleaning old instances..."
   sudo systemctl stop KlipperScreen 2>/dev/null || true
   sudo pkill -f "${ks_dir}/screen.py" 2>/dev/null || true
@@ -360,7 +360,6 @@ EOF
   echo "[KlipperScreen] starting..."
   sudo systemctl restart KlipperScreen
 
-  # Smoke test (hard fail if UI doesn't come up)
   echo "[KlipperScreen] smoke test..."
   local ok=0
   for _ in {1..20}; do
@@ -391,7 +390,6 @@ EOF
 # Config deploy helpers
 # ------------------------------------------------------------
 render_moonraker_conf() {
-  # usage: render_moonraker_conf SRC DST
   local src="$1"
   local dst="$2"
   cp -a "$src" "$dst"
@@ -554,12 +552,8 @@ ensure_moonraker_allowed_service() {
 # Mainsail header label + branding (best-effort)
 # ------------------------------------------------------------
 set_mainsail_ui_branding() {
-  # Values come from configs/Mainsail/customization.env (loaded once in MAIN)
-  # - Hide printer label: general.printername = MAINSAIL_PRINTERNAME (usually " ")
-  # - Set uiSettings colors: logo + primary + theme
   local url="http://127.0.0.1:7125"
 
-  # Wait for Moonraker to be up (handles restarts during install)
   for _ in {1..30}; do
     if curl -fsS "${url}/server/info" >/dev/null 2>&1; then
       break
@@ -567,14 +561,11 @@ set_mainsail_ui_branding() {
     sleep 0.5
   done
 
-  # Hide printer label (and avoid hostname fallback)
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
     -d "{\"namespace\":\"mainsail\",\"key\":\"general\",\"value\":{\"printername\":\"${MAINSAIL_PRINTERNAME}\"}}" \
     >/dev/null 2>&1 || true
 
-  # Force UI colors deterministically (no jq dependency).
-  # NOTE: this overwrites uiSettings as a whole; include theme so it remains stable.
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
     -d "{\"namespace\":\"mainsail\",\"key\":\"uiSettings\",\"value\":{\"logo\":\"${MAINSAIL_UI_LOGO}\",\"primary\":\"${MAINSAIL_UI_PRIMARY}\",\"theme\":\"${MAINSAIL_UI_THEME}\"}}" \
@@ -592,6 +583,10 @@ deploy_mainsail_theme() {
   rm -rf "$THEME_DIR" 2>/dev/null || true
   mkdir -p "$THEME_DIR"
   cp -a "$src_theme"/. "$THEME_DIR"/
+
+  # Keep .theme assets-only: NEVER deploy customization.env (config for installer/update only)
+  rm -f "${THEME_DIR}/customization.env" 2>/dev/null || true
+
   chown -R "${USER_NAME}:${USER_NAME}" "$THEME_DIR" 2>/dev/null || true
   CONFIG_CHANGED=1
 }
@@ -612,7 +607,6 @@ deploy_klipperscreen_theme() {
 }
 
 patch_klipperscreen_theme_paths() {
-  # Make CSS deterministic by expanding %USER% placeholders to absolute paths.
   local css="${HOME_DIR}/KlipperScreen/styles/velvet-darker/style.css"
 
   if [[ ! -f "$css" ]]; then
@@ -649,10 +643,9 @@ echo "[3/8] Loading and validating versions.env..."
 load_versions_env
 validate_versions_env
 
-echo "[3b/8] Loading Mainsail customization.env..."
+echo "[3b/8] Loading Mainsail customization.env (repo-only)..."
 load_mainsail_customization_env
 
-# Defaults if missing from versions.env
 KLIPPER_DIR="${KLIPPER_DIR:-/home/${USER_NAME}/klipper}"
 MOONRAKER_DIR="${MOONRAKER_DIR:-/home/${USER_NAME}/moonraker}"
 CROWSNEST_DIR="${CROWSNEST_DIR:-/home/${USER_NAME}/crowsnest}"
@@ -802,9 +795,6 @@ sudo systemctl daemon-reload
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
-# ------------------------------------------------------------
-# Restart / Finalize
-# ------------------------------------------------------------
 echo
 echo "Finalizing..."
 
@@ -821,7 +811,6 @@ if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
   sudo systemctl restart nginx 2>/dev/null || true
 fi
 
-# Always enforce Mainsail header + branding (best-effort)
 set_mainsail_ui_branding
 
 echo
