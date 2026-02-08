@@ -9,7 +9,7 @@ set -euo pipefail
 #       - Klipper (git)
 #       - Moonraker (git)
 #       - Crowsnest (git)          (optional but supported)
-#       - KlipperScreen (git)      (and best-effort service/venv if missing)
+#       - KlipperScreen (git)      (and deterministic X11 stack + smoke test)
 #       - Mainsail: shipped by MainsailOS (web bundle) -> no pin here
 #       - System OS: NOT pinned here (apt upgrades are not rollbackable)
 #  2) Deploy config files from repo ./configs to printer_data:
@@ -31,7 +31,7 @@ set -euo pipefail
 #       - expose only root/*.gcode as symlinks in: <printer_data>/gcodes/USB
 #       - IMPORTANT: only triggers on ID_BUS=="usb" (won't hit mmcblk0p1)
 #  6) Restart:
-#       - Always restart KlipperScreen (UI refresh)
+#       - Always enforce KlipperScreen X11 golden stack (UI refresh + smoke test)
 #       - Restart other services only if configs/themes changed
 # ------------------------------------------------------------
 
@@ -105,6 +105,8 @@ need_cmd uniq
 need_cmd rm
 need_cmd cp
 need_cmd mkdir
+need_cmd ps
+need_cmd pgrep
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -235,57 +237,112 @@ ensure_and_pin_repo() {
 }
 
 # ------------------------------------------------------------
-# Best-effort KlipperScreen service/venv (only if missing)
+# KlipperScreen X11 Stack (GOLDEN, deterministic)
 # ------------------------------------------------------------
-ensure_klipperscreen_service_best_effort() {
-  # If KlipperScreen.service already exists, do nothing.
-  if systemctl list-unit-files | awk '{print $1}' | grep -qx "KlipperScreen.service"; then
-    return 0
-  fi
-
+ensure_klipperscreen_x11_stack() {
   local ks_dir="${KSCREEN_DIR:-${HOME_DIR}/KlipperScreen}"
+  local venv_dir="${HOME_DIR}/.KlipperScreen-env"
+  local start_sh="${HOME_DIR}/ks-start.sh"
+  local unit_path="/etc/systemd/system/KlipperScreen.service"
+
   if [[ ! -d "$ks_dir" ]]; then
+    echo "[KlipperScreen] repo missing at $ks_dir -> skipping UI stack"
     return 0
   fi
 
-  # Create venv if missing
-  local venv_dir="${HOME_DIR}/.KlipperScreen-env"
+  echo "[KlipperScreen] ensuring X11 prerequisites..."
+  sudo apt-get update
+  sudo apt-get install -y \
+    xinit xserver-xorg xserver-xorg-legacy xserver-xorg-core \
+    xserver-xorg-input-libinput xserver-xorg-input-evdev \
+    libgtk-3-0 gir1.2-gtk-3.0 python3-venv python3-pip python3-dev \
+    >/dev/null 2>&1 || true
+
+  # Ensure venv exists (deterministic)
   if [[ ! -d "$venv_dir" ]]; then
     echo "[KlipperScreen] creating venv: $venv_dir"
-    sudo apt-get update
-    sudo apt-get install -y python3-venv python3-pip python3-dev libjpeg-dev zlib1g-dev >/dev/null 2>&1 || true
-    python3 -m venv "$venv_dir" || true
+    python3 -m venv "$venv_dir"
     "$venv_dir/bin/pip" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
     if [[ -f "$ks_dir/scripts/KlipperScreen-requirements.txt" ]]; then
       "$venv_dir/bin/pip" install -r "$ks_dir/scripts/KlipperScreen-requirements.txt" >/dev/null 2>&1 || true
     fi
   fi
 
-  # Install systemd unit
-  local unit_path="/etc/systemd/system/KlipperScreen.service"
-  local content
-  content=$(cat <<EOF
+  echo "[KlipperScreen] writing start script: $start_sh"
+  cat > "$start_sh" <<EOF
+#!/usr/bin/env bash
+set -e
+
+/usr/bin/openvt -f -c 7 -- /bin/su - ${USER_NAME} -c "/usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -nolisten tcp" &
+
+sleep 1
+exit 0
+EOF
+  chmod +x "$start_sh"
+  chown "${USER_NAME}:${USER_NAME}" "$start_sh" 2>/dev/null || true
+
+  echo "[KlipperScreen] writing systemd unit: $unit_path"
+  local unit_content
+  unit_content=$(cat <<EOF
 [Unit]
-Description=KlipperScreen
+Description=KlipperScreen (X11)
 After=network-online.target moonraker.service
 Wants=network-online.target
 
 [Service]
-Type=simple
-User=${USER_NAME}
-WorkingDirectory=${ks_dir}
-Environment=PYTHONUNBUFFERED=1
-ExecStart=${venv_dir}/bin/python ${ks_dir}/screen.py
-Restart=on-failure
-RestartSec=2
+Type=oneshot
+ExecStart=${start_sh}
+RemainAfterExit=yes
+KillMode=none
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=KlipperScreenX11
 
 [Install]
 WantedBy=multi-user.target
 EOF
 )
-  write_file_sudo "$unit_path" "$content"
+  write_file_sudo "$unit_path" "$unit_content"
+
+  echo "[KlipperScreen] (re)loading + enabling service..."
   sudo systemctl daemon-reload
   sudo systemctl enable KlipperScreen >/dev/null 2>&1 || true
+
+  # Cleanup old instances to avoid duplicates/conflicts on :0
+  echo "[KlipperScreen] stopping/cleaning old instances..."
+  sudo pkill -f "${ks_dir}/screen.py" 2>/dev/null || true
+  sudo pkill -f "xinit.*${ks_dir}/screen.py" 2>/dev/null || true
+  sudo pkill -f "Xorg :0" 2>/dev/null || true
+  sudo rm -f /tmp/.X11-unix/X0 2>/dev/null || true
+
+  echo "[KlipperScreen] starting..."
+  sudo systemctl restart KlipperScreen
+
+  # Smoke test (hard fail if UI doesn't come up)
+  echo "[KlipperScreen] smoke test..."
+  local ok=0
+  for _ in {1..20}; do
+    if [[ -S /tmp/.X11-unix/X0 ]] && pgrep -f "${ks_dir}/screen.py" >/dev/null 2>&1; then
+      ok=1
+      break
+    fi
+    sleep 0.5
+  done
+
+  if [[ "$ok" -ne 1 ]]; then
+    echo "❌ [KlipperScreen] ERROR: UI did not come up."
+    echo "   - /tmp/.X11-unix:"
+    ls -lah /tmp/.X11-unix/ || true
+    echo "   - processes:"
+    ps aux | egrep "openvt|Xorg|xinit|screen.py" | grep -v grep || true
+    echo "   - last logs (KlipperScreenX11):"
+    journalctl -t KlipperScreenX11 -n 200 --no-pager || true
+    echo "   - service status:"
+    sudo systemctl status KlipperScreen --no-pager -l || true
+    exit 1
+  fi
+
+  echo "✅ [KlipperScreen] UI OK"
 }
 
 # ------------------------------------------------------------
@@ -514,13 +571,13 @@ MAINSAIL_DIR="${MAINSAIL_DIR:-/home/${USER_NAME}/mainsail}"
 
 echo "[4/8] Ensuring and pinning required software..."
 # Origins/branches: keep hardcoded to official upstreams (no fork needed)
-ensure_and_pin_repo "Klipper"       "$KLIPPER_DIR"   "https://github.com/Klipper3d/klipper.git"          "master" "${KLIPPER_REF:-}"
-ensure_and_pin_repo "Moonraker"     "$MOONRAKER_DIR" "https://github.com/Arksine/moonraker.git"          "master" "${MOONRAKER_REF:-}"
-ensure_and_pin_repo "Crowsnest"     "$CROWSNEST_DIR" "https://github.com/mainsail-crew/crowsnest.git"    "master" "${CROWSNEST_REF:-}"
+ensure_and_pin_repo "Klipper"       "$KLIPPER_DIR"   "https://github.com/Klipper3d/klipper.git"            "master" "${KLIPPER_REF:-}"
+ensure_and_pin_repo "Moonraker"     "$MOONRAKER_DIR" "https://github.com/Arksine/moonraker.git"           "master" "${MOONRAKER_REF:-}"
+ensure_and_pin_repo "Crowsnest"     "$CROWSNEST_DIR" "https://github.com/mainsail-crew/crowsnest.git"     "master" "${CROWSNEST_REF:-}"
 ensure_and_pin_repo "KlipperScreen" "$KSCREEN_DIR"   "https://github.com/KlipperScreen/KlipperScreen.git" "master" "${KSCREEN_REF:-}"
 
-# If KlipperScreen wasn't present on a fresh MainsailOS, best-effort service/venv
-ensure_klipperscreen_service_best_effort
+# ALWAYS enforce golden X11 stack for KlipperScreen (deterministic + smoke test)
+ensure_klipperscreen_x11_stack
 
 echo "[5/8] Deploying configuration files..."
 require_file() {
@@ -662,14 +719,14 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 
 # ------------------------------------------------------------
-# Restart
+# Restart / Finalize
 # ------------------------------------------------------------
 echo
 echo "Finalizing..."
 
-# Always restart KlipperScreen to refresh UI/themes
-echo "Restarting KlipperScreen (UI refresh)..."
-sudo systemctl restart KlipperScreen 2>/dev/null || true
+# Always enforce golden KlipperScreen (includes cleanup + restart + smoke test)
+echo "Ensuring KlipperScreen X11 stack (UI refresh + stability)..."
+ensure_klipperscreen_x11_stack
 
 if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
   echo "Configuration/themes changed. Restarting core services..."
