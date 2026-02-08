@@ -19,6 +19,7 @@ set -euo pipefail
 #
 # Deploys UI customizations (NO backup, hard replace):
 #   - Mainsail:      ./configs/Mainsail/* -> <printer_data>/config/.theme/
+#       NOTE: customization.env is NOT deployed into .theme (assets-only).
 #   - KlipperScreen: ./configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker
 #   - Patch KlipperScreen theme CSS placeholders (e.g. %USER%) to absolute path
 #
@@ -35,7 +36,7 @@ set -euo pipefail
 # Mainsail header label + branding:
 #   - Force Mainsail Settings -> General -> Printer Name to a single space (" ")
 #     via Moonraker DB so it shows nothing next to the logo.
-#   - Force Mainsail uiSettings colors (from configs/Mainsail/customization.env)
+#   - Force Mainsail uiSettings colors (read from repo configs/Mainsail/customization.env only)
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-update.log"
@@ -66,7 +67,7 @@ need_cmd cp
 need_cmd mkdir
 need_cmd ps
 need_cmd pgrep
-need_cmd curl   # <-- added
+need_cmd curl
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
@@ -114,7 +115,9 @@ CHECK_ONLY="${CHECK_ONLY:-false}"            # "true" = no changes, only report
 SYSTEM_UPDATE="${SYSTEM_UPDATE:-false}"      # "true" = apt-get upgrade (NOT rollbackable)
 
 # ------------------------------------------------------------
-# Mainsail customization.env (Moonraker DB)
+# Mainsail customization.env (Moonraker DB) - READ ONLY
+#  - Keep file in repo: configs/Mainsail/customization.env
+#  - DO NOT deploy it into .theme (assets-only).
 # ------------------------------------------------------------
 load_mainsail_customization_env() {
   local cf="${REPO_DIR}/configs/Mainsail/customization.env"
@@ -126,7 +129,7 @@ load_mainsail_customization_env() {
   MAINSAIL_UI_THEME="${MAINSAIL_UI_THEME:-"mainsail"}"
 
   if [[ -f "$cf" ]]; then
-    echo "[Mainsail] loading customization from: $cf"
+    echo "[Mainsail] loading customization from repo (not deployed): $cf"
     # shellcheck disable=SC1090
     source "$cf"
   else
@@ -152,11 +155,8 @@ load_mainsail_customization_env() {
 # Rollback state
 # ------------------------------------------------------------
 
-# Map: repo_dir -> previous_head
-declare -A PREV_HEAD=()
-
-# Lists of backups created in this run: "backup_path|dest_path"
-declare -a CREATED_BACKUPS=()
+declare -A PREV_HEAD=()         # repo_dir -> previous_head
+declare -a CREATED_BACKUPS=()   # "backup_path|dest_path"
 
 CHANGED=0
 ROLLBACK_IN_PROGRESS=0
@@ -196,7 +196,6 @@ restore_git_state() {
 }
 
 create_backup_if_needed() {
-  # If dst exists and differs from src, create backup and record it.
   local src="$1"
   local dst="$2"
   local name
@@ -363,13 +362,11 @@ set_mainsail_ui_branding() {
     sleep 0.5
   done
 
-  # Hide printer label
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
     -d "{\"namespace\":\"mainsail\",\"key\":\"general\",\"value\":{\"printername\":\"${MAINSAIL_PRINTERNAME}\"}}" \
     >/dev/null 2>&1 || true
 
-  # Force UI colors deterministically (no jq dependency)
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
     -d "{\"namespace\":\"mainsail\",\"key\":\"uiSettings\",\"value\":{\"logo\":\"${MAINSAIL_UI_LOGO}\",\"primary\":\"${MAINSAIL_UI_PRIMARY}\",\"theme\":\"${MAINSAIL_UI_THEME}\"}}" \
@@ -379,7 +376,6 @@ set_mainsail_ui_branding() {
 # ------------------------------------------------------------
 # KlipperScreen GOLDEN X11 stack enforcement (service + launcher)
 # ------------------------------------------------------------
-
 write_file_sudo() {
   local path="$1"
   local content="$2"
@@ -526,7 +522,6 @@ patch_klipperscreen_theme_paths() {
 # -------------------------------
 # UI customization deployment
 # -------------------------------
-
 deploy_dir_replace() {
   local src="$1"
   local dst="$2"
@@ -561,6 +556,13 @@ deploy_ui_customizations() {
   local mainsail_dst="${CONFIG_ROOT}/.theme"
   deploy_dir_replace "$mainsail_src" "$mainsail_dst" "Mainsail theme (.theme)"
 
+  # Keep .theme assets-only: NEVER deploy customization.env (config for installer/update only)
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "Would remove: ${mainsail_dst}/customization.env (assets-only theme dir)"
+  else
+    rm -f "${mainsail_dst}/customization.env" 2>/dev/null || true
+  fi
+
   local kscreen_src="${CONFIGS_SRC_DIR}/KlipperScreen/velvet-darker"
   local kscreen_styles_dir="${KSCREEN_DIR:-/home/${USER_NAME}/KlipperScreen}/styles"
   local kscreen_dst="${kscreen_styles_dir}/velvet-darker"
@@ -569,6 +571,9 @@ deploy_ui_customizations() {
   patch_klipperscreen_theme_paths
 }
 
+# ------------------------------------------------------------
+# Rollback
+# ------------------------------------------------------------
 rollback() {
   if [[ "$ROLLBACK_IN_PROGRESS" -eq 1 ]]; then
     return 0
@@ -617,9 +622,7 @@ echo "CHECK_ONLY: $CHECK_ONLY"
 echo "SYSTEM_UPDATE: $SYSTEM_UPDATE"
 echo
 
-# ------------------------------------------------------------
 # Load Mainsail customization.env early (for DB writes)
-# ------------------------------------------------------------
 load_mainsail_customization_env
 
 # ------------------------------------------------------------
