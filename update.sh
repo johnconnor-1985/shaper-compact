@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ------------------------------------------------------------
-# Shaper Compact - update.sh (Step 1: rollback + pins + config deploy)
+# Shaper Compact - update.sh (rollback + pins + config deploy)
 #
 # Enforces pinned versions from versions.env (best-effort):
 #   - Klipper (git)
@@ -325,7 +325,11 @@ restart_services() {
 
 # ------------------------------------------------------------
 # KlipperScreen GOLDEN X11 stack enforcement (service + launcher)
+#   - FIX: avoid oneshot that exits (causing KS to die on UI "restart")
+#   - FIX: run xinit from ks_dir so relative assets work
+#   - FIX: explicit vt7 + openvt wait (-w) + session (-s) to avoid tty perms races
 # ------------------------------------------------------------
+
 write_file_sudo() {
   local path="$1"
   local content="$2"
@@ -379,10 +383,7 @@ ensure_klipperscreen_x11_stack() {
 #!/usr/bin/env bash
 set -e
 
-/usr/bin/openvt -f -c 7 -- /bin/su - ${USER_NAME} -c "/usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -nolisten tcp" &
-
-sleep 1
-exit 0
+exec /usr/bin/openvt -s -w -f -c 7 -- /bin/su - ${USER_NAME} -c 'cd ${ks_dir} && exec /usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -nolisten tcp vt7'
 EOF
 )
   if [[ "$CHECK_ONLY" == "true" ]]; then
@@ -403,10 +404,12 @@ After=network-online.target moonraker.service
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=${start_sh}
-RemainAfterExit=yes
-KillMode=none
+Restart=always
+RestartSec=2
+KillMode=mixed
+TimeoutStopSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=KlipperScreenX11
@@ -418,40 +421,42 @@ EOF
   if [[ "$CHECK_ONLY" == "true" ]]; then
     echo "Would write: $unit_path"
     CHANGED=1
-  else
-    write_file_sudo "$unit_path" "$unit_content"
-    sudo systemctl daemon-reload
-    sudo systemctl enable KlipperScreen >/dev/null 2>&1 || true
-
-    # Cleanup old instances to avoid duplicates/conflicts on :0
-    sudo pkill -f "${ks_dir}/screen.py" 2>/dev/null || true
-    sudo pkill -f "xinit.*${ks_dir}/screen.py" 2>/dev/null || true
-    sudo pkill -f "Xorg :0" 2>/dev/null || true
-    sudo rm -f /tmp/.X11-unix/X0 2>/dev/null || true
-
-    sudo systemctl restart KlipperScreen
-
-    # Smoke test
-    local ok=0
-    for _ in {1..20}; do
-      if [[ -S /tmp/.X11-unix/X0 ]] && pgrep -f "${ks_dir}/screen.py" >/dev/null 2>&1; then
-        ok=1
-        break
-      fi
-      sleep 0.5
-    done
-
-    if [[ "$ok" -ne 1 ]]; then
-      echo "❌ [KlipperScreen] ERROR: UI did not come up."
-      ls -lah /tmp/.X11-unix/ || true
-      ps aux | egrep "openvt|Xorg|xinit|screen.py" | grep -v grep || true
-      journalctl -t KlipperScreenX11 -n 200 --no-pager || true
-      sudo systemctl status KlipperScreen --no-pager -l || true
-      exit 1
-    fi
-
-    echo "✅ [KlipperScreen] UI OK"
+    return 0
   fi
+
+  write_file_sudo "$unit_path" "$unit_content"
+  sudo systemctl daemon-reload
+  sudo systemctl enable KlipperScreen >/dev/null 2>&1 || true
+
+  # Cleanup old instances to avoid duplicates/conflicts on :0
+  sudo systemctl stop KlipperScreen 2>/dev/null || true
+  sudo pkill -f "${ks_dir}/screen.py" 2>/dev/null || true
+  sudo pkill -f "xinit.*${ks_dir}/screen.py" 2>/dev/null || true
+  sudo pkill -f "Xorg :0" 2>/dev/null || true
+  sudo rm -f /tmp/.X11-unix/X0 2>/dev/null || true
+
+  sudo systemctl restart KlipperScreen
+
+  # Smoke test
+  local ok=0
+  for _ in {1..20}; do
+    if [[ -S /tmp/.X11-unix/X0 ]] && pgrep -f "${ks_dir}/screen.py" >/dev/null 2>&1; then
+      ok=1
+      break
+    fi
+    sleep 0.5
+  done
+
+  if [[ "$ok" -ne 1 ]]; then
+    echo "❌ [KlipperScreen] ERROR: UI did not come up."
+    ls -lah /tmp/.X11-unix/ || true
+    ps aux | egrep "openvt|Xorg|xinit|screen.py" | grep -v grep || true
+    journalctl -t KlipperScreenX11 -n 200 --no-pager || true
+    sudo systemctl status KlipperScreen --no-pager -l || true
+    exit 1
+  fi
+
+  echo "✅ [KlipperScreen] UI OK"
 }
 
 # -------------------------------
