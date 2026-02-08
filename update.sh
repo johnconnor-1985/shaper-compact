@@ -7,7 +7,7 @@ set -euo pipefail
 # Enforces pinned versions from versions.env (best-effort):
 #   - Klipper (git)
 #   - Moonraker (git)
-#   - KlipperScreen (git)
+#   - KlipperScreen (git) + GOLDEN X11 stack (service + launcher) + smoke test
 #   - Crowsnest (git)
 #   - Mainsail (git, only if MAINSAIL_REF is set and directory is a git repo)
 #   - System OS: optional apt upgrade (NOT rollbackable)
@@ -29,6 +29,7 @@ set -euo pipefail
 #   - If any step fails (except system upgrade), rollback restores:
 #       * git repos to their previous HEAD
 #       * config files to their previous state (using backups created this run)
+#   - NOTE: UI custom dirs are "no backup"; rollback does not revert them.
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-update.log"
@@ -57,6 +58,8 @@ need_cmd readlink
 need_cmd rm
 need_cmd cp
 need_cmd mkdir
+need_cmd ps
+need_cmd pgrep
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
@@ -320,6 +323,137 @@ restart_services() {
   done
 }
 
+# ------------------------------------------------------------
+# KlipperScreen GOLDEN X11 stack enforcement (service + launcher)
+# ------------------------------------------------------------
+write_file_sudo() {
+  local path="$1"
+  local content="$2"
+  sudo mkdir -p "$(dirname "$path")"
+  printf "%s" "$content" | sudo tee "$path" >/dev/null
+}
+
+ensure_klipperscreen_x11_stack() {
+  local ks_dir="${KSCREEN_DIR:-${HOME_DIR}/KlipperScreen}"
+  local venv_dir="${HOME_DIR}/.KlipperScreen-env"
+  local start_sh="${HOME_DIR}/ks-start.sh"
+  local unit_path="/etc/systemd/system/KlipperScreen.service"
+
+  if [[ ! -d "$ks_dir" ]]; then
+    echo "[KlipperScreen] repo missing at $ks_dir -> skipping UI stack"
+    return 0
+  fi
+
+  echo "[KlipperScreen] ensuring X11 prerequisites..."
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "Would ensure packages: xinit xserver-xorg* libgtk-3-0 gir1.2-gtk-3.0 python3-venv python3-pip python3-dev"
+    CHANGED=1
+  else
+    sudo apt-get update
+    sudo apt-get install -y \
+      xinit xserver-xorg xserver-xorg-legacy xserver-xorg-core \
+      xserver-xorg-input-libinput xserver-xorg-input-evdev \
+      libgtk-3-0 gir1.2-gtk-3.0 python3-venv python3-pip python3-dev \
+      >/dev/null 2>&1 || true
+  fi
+
+  # Ensure venv exists
+  if [[ ! -d "$venv_dir" ]]; then
+    if [[ "$CHECK_ONLY" == "true" ]]; then
+      echo "Would create venv: $venv_dir"
+      CHANGED=1
+    else
+      echo "[KlipperScreen] creating venv: $venv_dir"
+      python3 -m venv "$venv_dir"
+      "$venv_dir/bin/pip" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+      if [[ -f "$ks_dir/scripts/KlipperScreen-requirements.txt" ]]; then
+        "$venv_dir/bin/pip" install -r "$ks_dir/scripts/KlipperScreen-requirements.txt" >/dev/null 2>&1 || true
+      fi
+      chown -R "${USER_NAME}:${USER_NAME}" "$venv_dir" 2>/dev/null || true
+    fi
+  fi
+
+  echo "[KlipperScreen] writing start script: $start_sh"
+  local start_content
+  start_content=$(cat <<EOF
+#!/usr/bin/env bash
+set -e
+
+/usr/bin/openvt -f -c 7 -- /bin/su - ${USER_NAME} -c "/usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -nolisten tcp" &
+
+sleep 1
+exit 0
+EOF
+)
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "Would write: $start_sh"
+    CHANGED=1
+  else
+    printf "%s" "$start_content" > "$start_sh"
+    chmod +x "$start_sh"
+    chown "${USER_NAME}:${USER_NAME}" "$start_sh" 2>/dev/null || true
+  fi
+
+  echo "[KlipperScreen] writing systemd unit: $unit_path"
+  local unit_content
+  unit_content=$(cat <<EOF
+[Unit]
+Description=KlipperScreen (X11)
+After=network-online.target moonraker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=${start_sh}
+RemainAfterExit=yes
+KillMode=none
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=KlipperScreenX11
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "Would write: $unit_path"
+    CHANGED=1
+  else
+    write_file_sudo "$unit_path" "$unit_content"
+    sudo systemctl daemon-reload
+    sudo systemctl enable KlipperScreen >/dev/null 2>&1 || true
+
+    # Cleanup old instances to avoid duplicates/conflicts on :0
+    sudo pkill -f "${ks_dir}/screen.py" 2>/dev/null || true
+    sudo pkill -f "xinit.*${ks_dir}/screen.py" 2>/dev/null || true
+    sudo pkill -f "Xorg :0" 2>/dev/null || true
+    sudo rm -f /tmp/.X11-unix/X0 2>/dev/null || true
+
+    sudo systemctl restart KlipperScreen
+
+    # Smoke test
+    local ok=0
+    for _ in {1..20}; do
+      if [[ -S /tmp/.X11-unix/X0 ]] && pgrep -f "${ks_dir}/screen.py" >/dev/null 2>&1; then
+        ok=1
+        break
+      fi
+      sleep 0.5
+    done
+
+    if [[ "$ok" -ne 1 ]]; then
+      echo "❌ [KlipperScreen] ERROR: UI did not come up."
+      ls -lah /tmp/.X11-unix/ || true
+      ps aux | egrep "openvt|Xorg|xinit|screen.py" | grep -v grep || true
+      journalctl -t KlipperScreenX11 -n 200 --no-pager || true
+      sudo systemctl status KlipperScreen --no-pager -l || true
+      exit 1
+    fi
+
+    echo "✅ [KlipperScreen] UI OK"
+  fi
+}
+
 # -------------------------------
 # UI customization deployment
 # -------------------------------
@@ -442,6 +576,11 @@ fi
 # System update (optional, NOT rollbackable)
 system_best_effort_update
 
+# Enforce golden KlipperScreen X11 stack (deterministic + smoke test)
+echo
+echo "[1b/4] Enforcing KlipperScreen X11 stack..."
+ensure_klipperscreen_x11_stack
+
 # ------------------------------------------------------------
 # 2) Deploy configs (NO printer.cfg) + UI customizations
 # ------------------------------------------------------------
@@ -499,20 +638,15 @@ git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
 echo
 echo "[4/4] Finalizing..."
 
-if [[ "$CHECK_ONLY" != "true" ]]; then
-    echo "Restarting KlipperScreen (UI refresh)..."
-    sudo systemctl restart KlipperScreen 2>/dev/null || true
-fi
-
 if [[ "$CHANGED" -eq 1 ]]; then
-    if [[ "$CHECK_ONLY" == "true" ]]; then
-        echo "Check-only mode: changes detected (no changes applied)."
-    else
-        echo "Changes applied. Restarting services..."
-        restart_services
-    fi
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "Check-only mode: changes detected (no changes applied)."
+  else
+    echo "Changes applied. Restarting services..."
+    restart_services
+  fi
 else
-    echo "No changes detected."
+  echo "No changes detected."
 fi
 
 echo
