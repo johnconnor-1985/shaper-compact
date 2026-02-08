@@ -38,9 +38,7 @@ set -euo pipefail
 #  7) Mainsail header label + branding:
 #       - Force Mainsail "Printer Name" to a single space (" ") via Moonraker DB
 #         so it shows nothing next to the logo (no hostname fallback).
-#       - Force Mainsail uiSettings colors:
-#           logo    = "#951DF0"
-#           primary = "#D834E4"
+#       - Force Mainsail uiSettings colors (from configs/Mainsail/customization.env)
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -200,6 +198,41 @@ validate_versions_env() {
       exit 1
     fi
   done
+}
+
+# ------------------------------------------------------------
+# customization.env (Mainsail UI customization)
+# ------------------------------------------------------------
+load_mainsail_customization_env() {
+  local cf="${REPO_DIR}/configs/Mainsail/customization.env"
+
+  # Defaults (used if file missing or variables omitted)
+  MAINSAIL_PRINTERNAME="${MAINSAIL_PRINTERNAME:-" "}"
+  MAINSAIL_UI_LOGO="${MAINSAIL_UI_LOGO:-"#951DF0"}"
+  MAINSAIL_UI_PRIMARY="${MAINSAIL_UI_PRIMARY:-"#D834E4"}"
+  MAINSAIL_UI_THEME="${MAINSAIL_UI_THEME:-"mainsail"}"
+
+  if [[ -f "$cf" ]]; then
+    echo "[Mainsail] loading customization from: $cf"
+    # shellcheck disable=SC1090
+    source "$cf"
+  else
+    echo "[Mainsail] customization.env not found (using defaults): $cf"
+  fi
+
+  # Ensure non-empty essentials (keep behavior deterministic)
+  if [[ -z "${MAINSAIL_PRINTERNAME:-}" ]]; then
+    MAINSAIL_PRINTERNAME=" "
+  fi
+  if [[ -z "${MAINSAIL_UI_THEME:-}" ]]; then
+    MAINSAIL_UI_THEME="mainsail"
+  fi
+  if [[ -z "${MAINSAIL_UI_LOGO:-}" ]]; then
+    MAINSAIL_UI_LOGO="#951DF0"
+  fi
+  if [[ -z "${MAINSAIL_UI_PRIMARY:-}" ]]; then
+    MAINSAIL_UI_PRIMARY="#D834E4"
+  fi
 }
 
 # ------------------------------------------------------------
@@ -521,8 +554,9 @@ ensure_moonraker_allowed_service() {
 # Mainsail header label + branding (best-effort)
 # ------------------------------------------------------------
 set_mainsail_ui_branding() {
-  # - Hide printer label: general.printername = " "
-  # - Set uiSettings colors: logo + primary (and keep theme="mainsail")
+  # Values come from configs/Mainsail/customization.env (loaded once in MAIN)
+  # - Hide printer label: general.printername = MAINSAIL_PRINTERNAME (usually " ")
+  # - Set uiSettings colors: logo + primary + theme
   local url="http://127.0.0.1:7125"
 
   # Wait for Moonraker to be up (handles restarts during install)
@@ -533,17 +567,17 @@ set_mainsail_ui_branding() {
     sleep 0.5
   done
 
-  # Hide printer label
+  # Hide printer label (and avoid hostname fallback)
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
-    -d '{"namespace":"mainsail","key":"general","value":{"printername":" "}}' \
+    -d "{\"namespace\":\"mainsail\",\"key\":\"general\",\"value\":{\"printername\":\"${MAINSAIL_PRINTERNAME}\"}}" \
     >/dev/null 2>&1 || true
 
   # Force UI colors deterministically (no jq dependency).
-  # NOTE: this overwrites uiSettings as a whole; we include theme so it remains stable.
+  # NOTE: this overwrites uiSettings as a whole; include theme so it remains stable.
   curl -fsS -X POST "${url}/server/database/item" \
     -H "Content-Type: application/json" \
-    -d '{"namespace":"mainsail","key":"uiSettings","value":{"logo":"#951DF0","primary":"#D834E4","theme":"mainsail"}}' \
+    -d "{\"namespace\":\"mainsail\",\"key\":\"uiSettings\",\"value\":{\"logo\":\"${MAINSAIL_UI_LOGO}\",\"primary\":\"${MAINSAIL_UI_PRIMARY}\",\"theme\":\"${MAINSAIL_UI_THEME}\"}}" \
     >/dev/null 2>&1 || true
 }
 
@@ -614,6 +648,9 @@ fi
 echo "[3/8] Loading and validating versions.env..."
 load_versions_env
 validate_versions_env
+
+echo "[3b/8] Loading Mainsail customization.env..."
+load_mainsail_customization_env
 
 # Defaults if missing from versions.env
 KLIPPER_DIR="${KLIPPER_DIR:-/home/${USER_NAME}/klipper}"
