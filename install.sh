@@ -34,6 +34,10 @@ set -euo pipefail
 #  6) Restart:
 #       - Always enforce KlipperScreen X11 golden stack (UI refresh + smoke test)
 #       - Restart other services only if configs/themes changed
+#
+#  7) Mainsail header label:
+#       - Force Mainsail "Printer Name" to a single space (" ") via Moonraker DB
+#         so it shows nothing next to the logo (no hostname fallback).
 # ------------------------------------------------------------
 
 LOG="/tmp/shaper-compact-install.log"
@@ -108,6 +112,7 @@ need_cmd cp
 need_cmd mkdir
 need_cmd ps
 need_cmd pgrep
+need_cmd curl     # <-- added
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -511,6 +516,29 @@ ensure_moonraker_allowed_service() {
 }
 
 # ------------------------------------------------------------
+# Mainsail printer name (hide label next to logo)
+# ------------------------------------------------------------
+set_mainsail_printername_space() {
+  # Force Mainsail Settings -> General -> Printer Name to a single space (" ")
+  # so Mainsail displays nothing next to the logo (no hostname).
+  local url="http://127.0.0.1:7125"
+
+  # Wait for Moonraker to be up (handles restarts during install)
+  for _ in {1..30}; do
+    if curl -fsS "${url}/server/info" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+
+  # Best-effort only: do not fail installer if it can't be set
+  curl -fsS -X POST "${url}/server/database/item" \
+    -H "Content-Type: application/json" \
+    -d '{"namespace":"mainsail","key":"general","value":{"printername":" "}}' \
+    >/dev/null 2>&1 || true
+}
+
+# ------------------------------------------------------------
 # Themes
 # ------------------------------------------------------------
 deploy_mainsail_theme() {
@@ -755,6 +783,9 @@ if [[ "${CONFIG_CHANGED}" -eq 1 ]]; then
   sudo systemctl restart crowsnest 2>/dev/null || true
   sudo systemctl restart nginx 2>/dev/null || true
 fi
+
+# Always hide the Mainsail printer label (set to " ")
+set_mainsail_printername_space
 
 echo
 echo "Installation completed."
