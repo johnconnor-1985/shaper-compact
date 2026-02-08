@@ -9,7 +9,7 @@ set -euo pipefail
 #       - Klipper (git)
 #       - Moonraker (git)
 #       - Crowsnest (git)          (optional but supported)
-#       - KlipperScreen (git)      (and deterministic X11 stack + smoke test)
+#       - KlipperScreen (git)      (deterministic X11 stack + smoke test)
 #       - Mainsail: shipped by MainsailOS (web bundle) -> no pin here
 #       - System OS: NOT pinned here (apt upgrades are not rollbackable)
 #  2) Deploy config files from repo ./configs to printer_data:
@@ -26,6 +26,7 @@ set -euo pipefail
 #  4) Themes:
 #       - Mainsail: ./configs/Mainsail/* -> <printer_data>/config/.theme/ (replace, no backup)
 #       - KlipperScreen: ./configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker (replace, no backup)
+#       - Patch KlipperScreen theme CSS placeholders (e.g. %USER%) to absolute path
 #  5) USB G-code workflow:
 #       - udev + systemd template to mount USB vfat/exfat to /media/usb (RO)
 #       - expose only root/*.gcode as symlinks in: <printer_data>/gcodes/USB
@@ -539,6 +540,24 @@ deploy_klipperscreen_theme() {
   CONFIG_CHANGED=1
 }
 
+patch_klipperscreen_theme_paths() {
+  # Make CSS deterministic by expanding %USER% placeholders to absolute paths.
+  local css="${HOME_DIR}/KlipperScreen/styles/velvet-darker/style.css"
+
+  if [[ ! -f "$css" ]]; then
+    echo "[KlipperScreen] style.css not found (skip patch): $css"
+    return 0
+  fi
+
+  echo "[KlipperScreen] patching theme CSS paths in: $css"
+
+  # Replace %USER% placeholder
+  sed -i "s|%USER%|${USER_NAME}|g" "$css"
+
+  # Normalize any previously hardcoded username in absolute paths
+  sed -i "s|/home/[^/]\+/KlipperScreen/styles/velvet-darker/|/home/${USER_NAME}/KlipperScreen/styles/velvet-darker/|g" "$css"
+}
+
 # ------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------
@@ -624,6 +643,7 @@ sudo rm -f "${CONFIG_ROOT}/moonraker.asvc" 2>/dev/null || true
 echo "[7/8] Deploying themes..."
 deploy_mainsail_theme
 deploy_klipperscreen_theme
+patch_klipperscreen_theme_paths
 
 echo "[8/8] Installing USB handler + exFAT + udev/systemd..."
 sudo apt-get update
@@ -720,6 +740,9 @@ sudo udevadm trigger
 # ------------------------------------------------------------
 echo
 echo "Finalizing..."
+
+# Ensure theme CSS paths are patched (safe to run multiple times)
+patch_klipperscreen_theme_paths
 
 # Always enforce golden KlipperScreen (includes cleanup + restart + smoke test)
 echo "Ensuring KlipperScreen X11 stack (UI refresh + stability)..."
