@@ -273,10 +273,7 @@ ensure_klipperscreen_x11_stack() {
 #!/usr/bin/env bash
 set -e
 
-/usr/bin/openvt -f -c 7 -- /bin/su - ${USER_NAME} -c "/usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -nolisten tcp" &
-
-sleep 1
-exit 0
+exec /usr/bin/openvt -s -w -f -c 7 -- /bin/su - ${USER_NAME} -c 'cd ${ks_dir} && exec /usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -nolisten tcp vt7'
 EOF
   chmod +x "$start_sh"
   chown "${USER_NAME}:${USER_NAME}" "$start_sh" 2>/dev/null || true
@@ -290,10 +287,12 @@ After=network-online.target moonraker.service
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 ExecStart=${start_sh}
-RemainAfterExit=yes
-KillMode=none
+Restart=always
+RestartSec=2
+KillMode=mixed
+TimeoutStopSec=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=KlipperScreenX11
@@ -310,6 +309,7 @@ EOF
 
   # Cleanup old instances to avoid duplicates/conflicts on :0
   echo "[KlipperScreen] stopping/cleaning old instances..."
+  sudo systemctl stop KlipperScreen 2>/dev/null || true
   sudo pkill -f "${ks_dir}/screen.py" 2>/dev/null || true
   sudo pkill -f "xinit.*${ks_dir}/screen.py" 2>/dev/null || true
   sudo pkill -f "Xorg :0" 2>/dev/null || true
@@ -571,13 +571,10 @@ MAINSAIL_DIR="${MAINSAIL_DIR:-/home/${USER_NAME}/mainsail}"
 
 echo "[4/8] Ensuring and pinning required software..."
 # Origins/branches: keep hardcoded to official upstreams (no fork needed)
-ensure_and_pin_repo "Klipper"       "$KLIPPER_DIR"   "https://github.com/Klipper3d/klipper.git"            "master" "${KLIPPER_REF:-}"
-ensure_and_pin_repo "Moonraker"     "$MOONRAKER_DIR" "https://github.com/Arksine/moonraker.git"           "master" "${MOONRAKER_REF:-}"
-ensure_and_pin_repo "Crowsnest"     "$CROWSNEST_DIR" "https://github.com/mainsail-crew/crowsnest.git"     "master" "${CROWSNEST_REF:-}"
-ensure_and_pin_repo "KlipperScreen" "$KSCREEN_DIR"   "https://github.com/KlipperScreen/KlipperScreen.git" "master" "${KSCREEN_REF:-}"
-
-# ALWAYS enforce golden X11 stack for KlipperScreen (deterministic + smoke test)
-ensure_klipperscreen_x11_stack
+ensure_and_pin_repo "Klipper"       "$KLIPPER_DIR"   "https://github.com/Klipper3d/klipper.git"             "master" "${KLIPPER_REF:-}"
+ensure_and_pin_repo "Moonraker"     "$MOONRAKER_DIR" "https://github.com/Arksine/moonraker.git"            "master" "${MOONRAKER_REF:-}"
+ensure_and_pin_repo "Crowsnest"     "$CROWSNEST_DIR" "https://github.com/mainsail-crew/crowsnest.git"      "master" "${CROWSNEST_REF:-}"
+ensure_and_pin_repo "KlipperScreen" "$KSCREEN_DIR"   "https://github.com/KlipperScreen/KlipperScreen.git"  "master" "${KSCREEN_REF:-}"
 
 echo "[5/8] Deploying configuration files..."
 require_file() {
