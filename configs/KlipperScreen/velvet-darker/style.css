@@ -37,7 +37,7 @@ window {
 
 window {
     background-color: @bg;
-    background-image: url("background.png");
+    background-image: url("file:///home/velvet/KlipperScreen/styles/velvet-darker/background.png");
     background-size: cover;
 
 }
