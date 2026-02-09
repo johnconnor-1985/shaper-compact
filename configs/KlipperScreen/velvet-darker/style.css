@@ -54,7 +54,6 @@ button:active {
     border-color: #424242;
     border-style: solid;
     background-color: rgba(37, 37, 37, 0.7);
-    border-radius: .25em;
 }
 
 button.color1,
