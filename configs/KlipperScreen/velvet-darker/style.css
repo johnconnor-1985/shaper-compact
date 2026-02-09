@@ -43,11 +43,11 @@ window {
 }
 
 button {
-    background-color: rgba(37, 37, 37, 0.3);
+    background-color: transparent;
 }
 
 button:active {
-    background-color: transparent;
+    background-color: rgba(37, 37, 37, 0.7);
 }
 
 .button_active {
@@ -62,7 +62,7 @@ button.color3,
 button.color4 {
     background-color: rgba(37, 37, 37, 0.3);
     border-color: #a60bba;
-    border-radius: .5em;
+    border-radius: 2em;
     padding-top: 0.4em;
 }
 
