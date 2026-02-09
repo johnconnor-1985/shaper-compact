@@ -54,7 +54,7 @@ button:active {
     border-color: #424242;
     border-style: solid;
     background-color: rgba(37, 37, 37, 0.7);
-    border-radius: .25em;
+    border-radius: .5em;
 }
 
 button.color1,
@@ -63,10 +63,8 @@ button.color3,
 button.color4 {
     background-color: rgba(37, 37, 37, 0.3);
     border-color: #a60bba;
-    border-radius: .25em;
-    padding-top: 2em;
-    padding-left: 2em;
-    padding-right: 2em;
+    border-radius: .5em;
+    padding-top: 0.25em;
 }
 
 button.color1:active,
@@ -77,7 +75,7 @@ button.update:active,
 button.invalid:active,
 .dialog button:active {
     border-style: none;
-    background-color: transparent;
+    background-color: rgba(37, 37, 37, 0.7);
 }
 
 .active image,
