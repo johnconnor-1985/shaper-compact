@@ -47,13 +47,14 @@ button {
 }
 
 button:active {
-    background-color: trasparent;
+    background-color: transparent;
 }
 
 .button_active {
     border-color: #424242;
     border-style: solid;
     background-color: rgba(37, 37, 37, 0.7);
+    border-radius: .25em;
 }
 
 button.color1,
@@ -64,6 +65,8 @@ button.color4 {
     border-color: #a60bba;
     border-radius: .25em;
     padding-top: 2em;
+    padding-left: 2em;
+    padding-right: 2em;
 }
 
 button.color1:active,
