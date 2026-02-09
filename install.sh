@@ -115,6 +115,7 @@ need_cmd mkdir
 need_cmd ps
 need_cmd pgrep
 need_cmd curl
+need_cmd visudo
 
 # Detect printer_data (MainsailOS standard)
 PRINTER_DATA=""
@@ -145,6 +146,50 @@ UID_NUM="$(id -u "${USER_NAME}")"
 GID_NUM="$(id -g "${USER_NAME}")"
 
 CONFIG_CHANGED=0
+
+# ------------------------------------------------------------
+# Passwordless sudo (one-time) for non-interactive Update Manager
+#  - Enables update.sh to run via Mainsail/Moonraker Update Manager without prompts
+#  - Restricts NOPASSWD to a controlled set of commands required by our scripts
+# ------------------------------------------------------------
+install_passwordless_sudo_for_update() {
+  local sudoers_file="/etc/sudoers.d/shaper-compact"
+  local content
+  content=$(cat <<EOF
+Defaults:${USER_NAME} !authenticate
+Defaults:${USER_NAME} secure_path="/usr/sbin:/usr/bin:/sbin:/bin"
+
+Cmnd_Alias SHAPER_CMDS = \\
+  /usr/bin/apt-get, \\
+  /bin/systemctl, \\
+  /usr/bin/tee, \\
+  /bin/mkdir, \\
+  /bin/chmod, \\
+  /bin/chown, \\
+  /bin/rm, \\
+  /usr/bin/pkill
+
+${USER_NAME} ALL=(root) NOPASSWD: SHAPER_CMDS
+EOF
+)
+
+  echo "[sudoers] Installing passwordless sudo rules for Update Manager..."
+  write_file_sudo "$sudoers_file" "${content}"$'\n'
+
+  # Must be 0440 and owned by root:root
+  sudo chown root:root "$sudoers_file"
+  sudo chmod 0440 "$sudoers_file"
+
+  # Validate syntax (fail fast if invalid)
+  sudo visudo -cf "$sudoers_file" >/dev/null
+
+  # Quick check: should not prompt (but may still fail if sudoers not applied)
+  if sudo -n true >/dev/null 2>&1; then
+    echo "[sudoers] ✅ NOPASSWD OK for user: ${USER_NAME}"
+  else
+    echo "[sudoers] ⚠️ NOPASSWD check failed (sudo -n true). Please verify sudoers." >&2
+  fi
+}
 
 # ------------------------------------------------------------
 # Repo bootstrap (self)
@@ -628,6 +673,9 @@ echo "[1/8] Preparing directories..."
 mkdir -p "$GCODE_ROOT" "$USB_DIR"
 mkdir -p "$CONFIG_ROOT" "$TARGET_CONFIGS_DIR" "$BACKUP_DIR"
 sudo mkdir -p "$MOUNT_POINT"
+
+echo "[1b/8] Installing passwordless sudo rules (Update Manager non-interactive)..."
+install_passwordless_sudo_for_update
 
 echo "[2/8] Syncing shaper-compact repository..."
 sync_self_repo
