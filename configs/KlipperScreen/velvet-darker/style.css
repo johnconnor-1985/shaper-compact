@@ -43,11 +43,11 @@ window {
 }
 
 button {
-    background-color: transparent;
+    background-color: transparent; /* bottoni secondari, sfondo trasparente */
 }
 
 button:active {
-    background-color: rgba(37, 37, 37, 0.3);
+    background-color: rgba(37, 37, 37, 0.3); /* bottoni secondari, grigietto trasparente se cliccati */
     border-radius: 0.5em;
 }
 
@@ -62,8 +62,8 @@ button.color1,
 button.color2,
 button.color3,
 button.color4 {
-    background-color: rgba(37, 37, 37, 0.15);
-    border-color: #a60bba;
+    background-color: rgba(37, 37, 37, 0.15);  /* bottoni primari, sfondo grigietto trasparente */
+    border-color: #a60bba; /* bottoni primari, bordo violetto sotto */
     border-radius: .25em;
     padding-top: 0.4em;
 }
@@ -76,7 +76,7 @@ button.update:active,
 button.invalid:active,
 .dialog button:active {
     border-style: none;
-    background-color: rgba(37, 37, 37, 0.5);
+    background-color: rgba(37, 37, 37, 0.5); /* bottoni primari, grigione trasparente se cliccati */
 }
 
 .active image,
