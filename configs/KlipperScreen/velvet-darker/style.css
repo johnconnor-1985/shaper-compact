@@ -53,8 +53,8 @@ button:active {
 .button_active {
     border-color: #424242;
     border-style: solid;
-    background-color: rgba(37, 37, 37, 0.5);
-    border-radius: .25em;
+    background-color: rgba(37, 37, 37, 0.3);
+    border-radius: 1em;
 }
 
 button.color1,
