@@ -23,6 +23,11 @@ set -euo pipefail
 #   - KlipperScreen: ./configs/KlipperScreen/velvet-darker -> ~/KlipperScreen/styles/velvet-darker
 #   - Patch KlipperScreen theme CSS placeholders (e.g. %USER%) to absolute path
 #
+# Boot splash (Plymouth velvet) from repo ./configs/boot (best-effort):
+#   - /usr/share/plymouth/themes/velvet/{velvet.plymouth,velvet.script,splash.png,splash2.png}
+#   - /boot/firmware/{cmdline.txt,config.txt,initramfs8} updates + initramfs rebuild
+#   - NOTE: backed up as *.bak-<timestamp>, but NOT auto-rolled back by script
+#
 # Backups:
 #   - Only if destination existed and differed
 #   - Stored in: <printer_data>/config/Backup/
@@ -68,6 +73,8 @@ need_cmd mkdir
 need_cmd ps
 need_cmd pgrep
 need_cmd curl
+need_cmd awk
+need_cmd stat
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
@@ -116,8 +123,6 @@ SYSTEM_UPDATE="${SYSTEM_UPDATE:-false}"      # "true" = apt-get upgrade (NOT rol
 
 # ------------------------------------------------------------
 # Mainsail customization.env (Moonraker DB) - READ ONLY
-#  - Keep file in repo: configs/Mainsail/customization.env
-#  - DO NOT deploy it into .theme (assets-only).
 # ------------------------------------------------------------
 load_mainsail_customization_env() {
   local cf="${REPO_DIR}/configs/Mainsail/customization.env"
@@ -374,7 +379,127 @@ set_mainsail_ui_branding() {
 }
 
 # ------------------------------------------------------------
+# Boot splash (Plymouth velvet) from repo configs/boot
+# ------------------------------------------------------------
+backup_file_sudo() {
+  local f="$1"
+  if sudo test -f "$f"; then
+    sudo cp -a "$f" "${f}.bak-$(timestamp)"
+  fi
+}
+
+install_boot_splash_velvet() {
+  local boot="/boot"
+  [[ -d /boot/firmware ]] && boot="/boot/firmware"
+
+  local src="${CONFIGS_SRC_DIR}/boot"
+  local theme_dst="/usr/share/plymouth/themes/velvet"
+
+  local cfg="${boot}/config.txt"
+  local cmd="${boot}/cmdline.txt"
+
+  local req=(
+    "${src}/velvet.plymouth"
+    "${src}/velvet.script"
+    "${src}/splash.png"
+    "${src}/splash2.png"
+  )
+  local f
+  for f in "${req[@]}"; do
+    if [[ ! -f "$f" ]]; then
+      echo "[boot] Missing in repo: $f" >&2
+      exit 1
+    fi
+  done
+
+  # Sanity check: avoid 2-byte broken file scenario
+  local s2_size
+  s2_size="$(stat -c%s "${src}/splash2.png" 2>/dev/null || echo 0)"
+  if [[ "$s2_size" -lt 1024 ]]; then
+    echo "[boot] ERROR: repo splash2.png looks corrupted (size=${s2_size} bytes). Refusing to install." >&2
+    exit 1
+  fi
+
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "[boot] Would install plymouth theme velvet from: $src"
+    echo "[boot] Would patch: ${cfg}, ${cmd} and rebuild initramfs8 under: ${boot}"
+    CHANGED=1
+    return 0
+  fi
+
+  echo "[boot] Installing Plymouth + initramfs-tools..."
+  sudo apt-get update
+  sudo apt-get install -y plymouth plymouth-themes initramfs-tools >/dev/null 2>&1 || true
+
+  echo "[boot] Deploying Plymouth theme: velvet"
+  sudo rm -rf "$theme_dst" 2>/dev/null || true
+  sudo mkdir -p "$theme_dst"
+  sudo cp -a "${src}/velvet.plymouth" "${theme_dst}/velvet.plymouth"
+  sudo cp -a "${src}/velvet.script"   "${theme_dst}/velvet.script"
+  sudo cp -a "${src}/splash.png"      "${theme_dst}/splash.png"
+  sudo cp -a "${src}/splash2.png"     "${theme_dst}/splash2.png"
+  sudo chown -R root:root "$theme_dst" 2>/dev/null || true
+  sudo chmod 0644 "${theme_dst}/"*.plymouth "${theme_dst}/"*.script "${theme_dst}/"*.png 2>/dev/null || true
+
+  # Initramfs: include KMS modules (Pi4 Bookworm)
+  echo "[boot] Ensuring initramfs KMS modules..."
+  sudo sed -i 's/^MODULES=.*/MODULES=most/' /etc/initramfs-tools/initramfs.conf
+
+  local m
+  for m in vc4 drm drm_kms_helper; do
+    grep -q "^${m}$" /etc/initramfs-tools/modules || echo "$m" | sudo tee -a /etc/initramfs-tools/modules >/dev/null
+  done
+
+  echo "[boot] Patching config.txt (kernel8 + initramfs8 + auto_initramfs + disable_splash)..."
+  backup_file_sudo "$cfg"
+
+  if sudo grep -q '^kernel=' "$cfg"; then
+    sudo sed -i 's/^kernel=.*/kernel=kernel8.img/' "$cfg"
+  else
+    echo 'kernel=kernel8.img' | sudo tee -a "$cfg" >/dev/null
+  fi
+
+  if sudo grep -q '^auto_initramfs=' "$cfg"; then
+    sudo sed -i 's/^auto_initramfs=.*/auto_initramfs=1/' "$cfg"
+  else
+    echo 'auto_initramfs=1' | sudo tee -a "$cfg" >/dev/null
+  fi
+
+  sudo grep -q '^initramfs initramfs8 followkernel' "$cfg" || echo 'initramfs initramfs8 followkernel' | sudo tee -a "$cfg" >/dev/null
+  sudo grep -q '^disable_splash=1' "$cfg" || echo 'disable_splash=1' | sudo tee -a "$cfg" >/dev/null
+
+  echo "[boot] Patching cmdline.txt (quiet+splash, hide cursor, hide systemd status, console tty3)..."
+  backup_file_sudo "$cmd"
+  local line
+  line="$(cat "$cmd" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g' | sed -E 's/[[:space:]]+$//')"
+  line="${line/console=tty1/console=tty3}"
+
+  local t
+  for t in quiet splash loglevel=0 vt.global_cursor_default=0 logo.nologo \
+           plymouth.ignore-serial-consoles systemd.show_status=0 rd.systemd.show_status=0
+  do
+    echo "$line" | grep -qE "(^| )${t}( |$)" || line="${line} ${t}"
+  done
+
+  printf "%s\n" "$line" | sudo tee "$cmd" >/dev/null
+
+  echo "[boot] Setting Plymouth default theme..."
+  sudo plymouth-set-default-theme velvet >/dev/null 2>&1 || true
+
+  echo "[boot] Rebuilding initramfs..."
+  sudo update-initramfs -u >/dev/null 2>&1 || true
+
+  echo "[boot] Copying initrd -> ${boot}/initramfs8"
+  sudo cp -f "/boot/initrd.img-$(uname -r)" "${boot}/initramfs8"
+  sudo sync
+
+  CHANGED=1
+  echo "[boot] ✅ Plymouth velvet installed"
+}
+
+# ------------------------------------------------------------
 # KlipperScreen GOLDEN X11 stack enforcement (service + launcher)
+#   - includes Xorg -quiet to hide banner "X.Org X Server ... protocol ..."
 # ------------------------------------------------------------
 write_file_sudo() {
   local path="$1"
@@ -428,7 +553,8 @@ ensure_klipperscreen_x11_stack() {
 #!/usr/bin/env bash
 set -e
 
-exec /usr/bin/openvt -s -w -f -c 7 -- /bin/su - ${USER_NAME} -c 'cd ${ks_dir} && exec /usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -nolisten tcp vt7'
+# -quiet removes the "X.Org X Server ... protocol ..." banner on startup
+exec /usr/bin/openvt -s -w -f -c 7 -- /bin/su - ${USER_NAME} -c 'cd ${ks_dir} && exec /usr/bin/xinit ${venv_dir}/bin/python ${ks_dir}/screen.py -- :0 -quiet -nolisten tcp vt7'
 EOF
 )
   if [[ "$CHECK_ONLY" == "true" ]]; then
@@ -628,7 +754,7 @@ load_mainsail_customization_env
 # ------------------------------------------------------------
 # 1) Enforce pinned versions (git)
 # ------------------------------------------------------------
-echo "[1/4] Enforcing pinned versions..."
+echo "[1/5] Enforcing pinned versions..."
 
 KLIPPER_DIR="${KLIPPER_DIR:-/home/${USER_NAME}/klipper}"
 MOONRAKER_DIR="${MOONRAKER_DIR:-/home/${USER_NAME}/moonraker}"
@@ -654,14 +780,14 @@ fi
 system_best_effort_update
 
 echo
-echo "[1b/4] Enforcing KlipperScreen X11 stack..."
+echo "[2/5] Enforcing KlipperScreen X11 stack..."
 ensure_klipperscreen_x11_stack
 
 # ------------------------------------------------------------
-# 2) Deploy configs (NO printer.cfg) + UI customizations
+# 3) Deploy configs (NO printer.cfg) + UI customizations
 # ------------------------------------------------------------
 echo
-echo "[2/4] Deploying configuration..."
+echo "[3/5] Deploying configuration..."
 
 ROOT_FILES=( "KlipperScreen.conf" "crowsnest.conf" "mainsail.cfg" "moonraker.conf" )
 CONFIGS_FILES=( "macros.cfg" "setup.cfg" )
@@ -695,12 +821,15 @@ done
 deploy_ui_customizations
 ensure_moonraker_allowed_service
 
+# ------------------------------------------------------------
+# 4) Boot splash (Plymouth velvet)
+# ------------------------------------------------------------
 echo
-echo "[3/4] Hygiene..."
-git -C "${REPO_DIR}" config core.fileMode false 2>/dev/null || true
+echo "[4/5] Boot splash (Plymouth velvet)..."
+install_boot_splash_velvet
 
 echo
-echo "[4/4] Finalizing..."
+echo "[5/5] Finalizing..."
 
 patch_klipperscreen_theme_paths
 
