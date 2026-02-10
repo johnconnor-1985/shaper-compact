@@ -1,50 +1,70 @@
 #include <Arduino.h>
 
 // ============================================================
-// Venturi Valve Controller
+// Venturi Valve Controller (non-blocking)
 // ------------------------------------------------------------
-// Controls a Venturi valve using timed cycles and a safety sensor.
-// The firmware is fully non-blocking:
+// Controls a Venturi valve (relay) using timed cycles and a
+// safety capacitive sensor with debounce filtering.
 //
-// • Venturi timing uses millis() instead of delay()
-// • Input signals use non-blocking debounce
+// Non-blocking design:
+// • Timing uses millis() (no delay())
+// • Inputs use non-blocking debounce sampling
 //
-// This keeps the system responsive at all times.
+// Added I/O features:
+// • PIN_FILTERED_SENSOR_STATE  -> outputs debounced sensor state
+// • PIN_FILTERED_SENSOR_LED    -> mirrors debounced sensor state
+// • PIN_LOADING_LED            -> ON when relay is ON
+// • PIN_WARNING_LED            -> turns ON at first alarm and stays ON
+//                                 until sensor becomes FULL again
+// • PIN_PAUSE_COMMAND          -> after N warnings, pulse HIGH for 1s
+// • PIN_FORCED_LOADING         -> debounced manual "force load" input
+//                                 (overrides everything, resets cycles)
 // ============================================================
 
 
-
 // ================= PIN CONFIGURATION =================
-//
 // Change these only if you rewire hardware
-//
 
-constexpr uint8_t PIN_VENTURI_RELAY = 2;   // Relay controlling Venturi valve
-constexpr uint8_t PIN_STATUS_LED    = 3;   // Status LED
-constexpr uint8_t PIN_BUZZER        = 12;  // Alarm buzzer
-constexpr uint8_t PIN_SENSOR        = 4;   // Safety sensor input
-constexpr uint8_t PIN_TRIGGER       = 9;   // External trigger input
+constexpr uint8_t PIN_VENTURI_RELAY          = 2;   // Output: Relay controlling Venturi valve
+constexpr uint8_t PIN_BUZZER                 = 3;   // Output: Alarm buzzer
 
+constexpr uint8_t PIN_FILTERED_SENSOR_STATE  = 8;   // Output: Debounced sensor state (logic-level)
+constexpr uint8_t PIN_PAUSE_COMMAND          = 9;   // Output: Pulse HIGH for 1s after N warnings
+constexpr uint8_t PIN_LOADING_LED            = 10;  // Output: ON while relay is ON
+constexpr uint8_t PIN_FILTERED_SENSOR_LED    = 11;  // Output: Mirrors debounced sensor state
+constexpr uint8_t PIN_WARNING_LED            = 12;  // Output: ON after first alarm, until sensor FULL again
+
+constexpr uint8_t PIN_SENSOR                 = 4;   // Input: Capacitive sensor input
+constexpr uint8_t PIN_TRIGGER                = 5;   // Input: Turn system on
+constexpr uint8_t PIN_FORCED_LOADING         = 6;   // Input: Force loading while pressed
+
+
+// ================= LOGIC POLARITY =================
 // Set true if sensor logic is inverted (active-low sensor)
 const bool SENSOR_INVERTED = false;
 
+// Optional (if your trigger / forced button are active-low, set these)
+const bool TRIGGER_INVERTED        = false;
+const bool FORCED_LOADING_INVERTED = false;
 
 
 // ================= VENTURI BEHAVIOR =================
-//
-// These values define how the system cycles
-//
 
 const int MAX_VENTURI_CYCLES = 3;   // How many activations before a pause
-const int MAX_PAUSE_BLOCKS   = 3;   // Silent pauses before alarm
+const int MAX_PAUSE_BLOCKS   = 2;   // Silent pauses before alarm
+
+// After how many "warnings" (alarm starts) we pulse PIN_PAUSE_COMMAND
+const int WARNINGS_BEFORE_PAUSE_PULSE = 5;
 
 // All timings in milliseconds
-const unsigned long VENTURI_ACTIVE_TIME_MS = 1000;  // Valve ON duration
-const unsigned long SILENT_PAUSE_MS        = 5000;  // Pause between cycles
-const unsigned long ALARM_DURATION_MS      = 3000;  // Buzzer ON time
-const unsigned long ALARM_INTERVAL_MS      = 17000; // Pause after alarm
-const unsigned long BOOT_DELAY_MS          = 10000; // Power-up stabilization
+const unsigned long VENTURI_ACTIVE_TIME_MS = 5000;   // Valve ON duration
+const unsigned long SILENT_PAUSE_MS        = 20000;  // Pause between cycles
+const unsigned long ALARM_DURATION_MS      = 2500;   // Buzzer ON time
+const unsigned long ALARM_INTERVAL_MS      = 30000;  // Pause after alarm
+const unsigned long BOOT_DELAY_MS          = 10000;  // Power-up stabilization
 
+// Pause command pulse duration
+const unsigned long PAUSE_PULSE_MS         = 1000;   // PIN_PAUSE_COMMAND HIGH for 1s
 
 
 // ================= DEBOUNCE SETTINGS =================
@@ -60,19 +80,16 @@ const unsigned long BOOT_DELAY_MS          = 10000; // Power-up stabilization
 
 unsigned long triggerDebounceMs = 1000;
 unsigned long sensorDebounceMs  = 1000;
-unsigned int  debounceSamples   = 10;
 
+// Forced loading should feel like a "button": typically shorter debounce
+unsigned long forcedDebounceMs  = 120;
+
+unsigned int  debounceSamples   = 10;
+unsigned int  forcedSamples     = 5;
 
 
 // ============================================================
 // STATE MACHINE
-// ------------------------------------------------------------
-// The controller always exists in exactly one state.
-// Each state has:
-//
-// • behavior
-// • start time
-// • transition condition
 // ============================================================
 
 enum SystemState {
@@ -84,15 +101,8 @@ enum SystemState {
 };
 
 
-
 // ============================================================
 // DEBOUNCER STRUCTURE
-// ------------------------------------------------------------
-// Stores the runtime state of the debounce filter
-//
-// stableState  → last accepted clean value
-// debouncing   → true while sampling
-// candidate    → possible new value under test
 // ============================================================
 
 struct Debouncer {
@@ -111,10 +121,8 @@ struct Debouncer {
 };
 
 
-
 // ============================================================
 // FUNCTION PROTOTYPES
-// (Explicit prototypes prevent Arduino IDE auto-prototype bugs)
 // ============================================================
 
 static void enterState(SystemState s, unsigned long now);
@@ -127,6 +135,10 @@ static void debouncerInit(Debouncer &d,
                           bool initialStable);
 static bool debouncerUpdate(Debouncer &d, unsigned long now);
 
+static void allOutputsOff();
+static void resetCycleCounters(bool resetWarnings);
+static void updatePausePulse(unsigned long now);
+static void startPausePulse(unsigned long now);
 
 
 // ============================================================
@@ -139,9 +151,19 @@ unsigned long stateStart = 0;
 int venturiCycleCount = 0;
 int pauseBlockCount   = 0;
 
+// Counts how many times we ENTER STATE_ALARM_ON since last reset
+int warningCount      = 0;
+
+// Warning LED latch: ON after first alarm, OFF only when sensor FULL again
+bool warningLatched   = false;
+
+// Pause pulse runtime
+bool pausePulseActive = false;
+unsigned long pausePulseStart = 0;
+
 Debouncer triggerDb;
 Debouncer sensorDb;
-
+Debouncer forcedDb;
 
 
 // ============================================================
@@ -154,7 +176,6 @@ static void enterState(SystemState s, unsigned long now) {
 }
 
 
-
 // ============================================================
 // RAW PIN READ WITH OPTIONAL INVERSION
 // ============================================================
@@ -165,10 +186,8 @@ static bool readPin(uint8_t pin, bool inverted) {
 }
 
 
-
 // ============================================================
 // DEBOUNCE INITIALIZATION
-// Called once at boot to configure each input
 // ============================================================
 
 static void debouncerInit(Debouncer &d,
@@ -192,17 +211,8 @@ static void debouncerInit(Debouncer &d,
 }
 
 
-
 // ============================================================
 // NON-BLOCKING DEBOUNCE UPDATE
-// ------------------------------------------------------------
-// Called every loop.
-// Returns the current clean (stable) input state.
-//
-// Logic:
-// • If reading changes → start sampling window
-// • If all samples match → accept new state
-// • If any sample fails → reject change
 // ============================================================
 
 static bool debouncerUpdate(Debouncer &d, unsigned long now)
@@ -248,6 +258,55 @@ static bool debouncerUpdate(Debouncer &d, unsigned long now)
 }
 
 
+// ============================================================
+// HELPERS
+// ============================================================
+
+static void allOutputsOff() {
+  digitalWrite(PIN_VENTURI_RELAY, LOW);
+  digitalWrite(PIN_LOADING_LED, LOW);
+
+  digitalWrite(PIN_BUZZER, LOW);
+
+  // Pause pulse output:
+  digitalWrite(PIN_PAUSE_COMMAND, LOW);
+  pausePulseActive = false;
+}
+
+static void resetCycleCounters(bool resetWarnings) {
+  venturiCycleCount = 0;
+  pauseBlockCount   = 0;
+
+  if (resetWarnings) {
+    warningCount   = 0;
+    warningLatched = false;
+    digitalWrite(PIN_WARNING_LED, LOW);
+
+    // also cancel any in-flight pause pulse
+    digitalWrite(PIN_PAUSE_COMMAND, LOW);
+    pausePulseActive = false;
+  }
+}
+
+static void startPausePulse(unsigned long now) {
+  // Pulse HIGH for PAUSE_PULSE_MS (non-blocking)
+  pausePulseActive = true;
+  pausePulseStart  = now;
+  digitalWrite(PIN_PAUSE_COMMAND, HIGH);
+}
+
+static void updatePausePulse(unsigned long now) {
+  if (pausePulseActive) {
+    if (now - pausePulseStart >= PAUSE_PULSE_MS) {
+      pausePulseActive = false;
+      digitalWrite(PIN_PAUSE_COMMAND, LOW);
+    }
+  } else {
+    // ensure LOW when not pulsing
+    digitalWrite(PIN_PAUSE_COMMAND, LOW);
+  }
+}
+
 
 // ============================================================
 // SETUP
@@ -256,30 +315,45 @@ static bool debouncerUpdate(Debouncer &d, unsigned long now)
 void setup()
 {
   pinMode(PIN_VENTURI_RELAY, OUTPUT);
-  pinMode(PIN_STATUS_LED, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
+
+  pinMode(PIN_FILTERED_SENSOR_STATE, OUTPUT);
+  pinMode(PIN_PAUSE_COMMAND, OUTPUT);
+  pinMode(PIN_LOADING_LED, OUTPUT);
+  pinMode(PIN_FILTERED_SENSOR_LED, OUTPUT);
+  pinMode(PIN_WARNING_LED, OUTPUT);
 
   pinMode(PIN_SENSOR, INPUT);
   pinMode(PIN_TRIGGER, INPUT);
+  pinMode(PIN_FORCED_LOADING, INPUT);
 
+  // Default safe outputs
   digitalWrite(PIN_VENTURI_RELAY, LOW);
-  digitalWrite(PIN_STATUS_LED, LOW);
   digitalWrite(PIN_BUZZER, LOW);
+
+  digitalWrite(PIN_FILTERED_SENSOR_STATE, LOW);
+  digitalWrite(PIN_PAUSE_COMMAND, LOW);
+  digitalWrite(PIN_LOADING_LED, LOW);
+  digitalWrite(PIN_FILTERED_SENSOR_LED, LOW);
+  digitalWrite(PIN_WARNING_LED, LOW);
 
   delay(BOOT_DELAY_MS);
 
   // Initialize debouncers using current readings
-  debouncerInit(triggerDb, PIN_TRIGGER, false,
+  debouncerInit(triggerDb, PIN_TRIGGER, TRIGGER_INVERTED,
                 triggerDebounceMs, debounceSamples,
-                readPin(PIN_TRIGGER, false));
+                readPin(PIN_TRIGGER, TRIGGER_INVERTED));
 
   debouncerInit(sensorDb, PIN_SENSOR, SENSOR_INVERTED,
                 sensorDebounceMs, debounceSamples,
                 readPin(PIN_SENSOR, SENSOR_INVERTED));
 
+  debouncerInit(forcedDb, PIN_FORCED_LOADING, FORCED_LOADING_INVERTED,
+                forcedDebounceMs, forcedSamples,
+                readPin(PIN_FORCED_LOADING, FORCED_LOADING_INVERTED));
+
   enterState(STATE_IDLE, millis());
 }
-
 
 
 // ============================================================
@@ -290,45 +364,92 @@ void loop()
 {
   const unsigned long now = millis();
 
-  const bool triggerActive = debouncerUpdate(triggerDb, now);
-  const bool sensorActive  = debouncerUpdate(sensorDb,  now);
+  // Always update pause pulse timing (non-blocking)
+  updatePausePulse(now);
 
+  // Update debounced inputs
+  const bool triggerActive      = debouncerUpdate(triggerDb, now);
+  const bool sensorActive       = debouncerUpdate(sensorDb,  now);   // "true" = sensor says FULL (per original logic)
+  const bool forcedLoadingPress = debouncerUpdate(forcedDb,  now);
 
+  // ----------------------------
+  // Output filtered sensor state
+  // ----------------------------
+  // If you prefer the opposite semantic (e.g. "empty"), invert here.
+  digitalWrite(PIN_FILTERED_SENSOR_STATE, sensorActive ? HIGH : LOW);
+  digitalWrite(PIN_FILTERED_SENSOR_LED,   sensorActive ? HIGH : LOW);
 
-  // ================= SAFETY OVERRIDE =================
-  // If trigger OFF or sensor ON → immediate shutdown
+  // ============================================================
+  // FORCED LOADING OVERRIDE (manual)
+  // ------------------------------------------------------------
+  // Requirement:
+  // • overrides everything (relay ON while pressed)
+  // • resets cycles and warnings
+  // • must turn OFF buzzer and warning LED
+  // • keeps filtered sensor LED/state functionality
+  // ============================================================
+  if (forcedLoadingPress) {
+    // Reset everything so when released we restart clean
+    resetCycleCounters(true);
 
-  if (!triggerActive || sensorActive) {
-    digitalWrite(PIN_VENTURI_RELAY, LOW);
-    digitalWrite(PIN_STATUS_LED, LOW);
+    // Hard override outputs
+    digitalWrite(PIN_VENTURI_RELAY, HIGH);
+    digitalWrite(PIN_LOADING_LED, HIGH);
+
     digitalWrite(PIN_BUZZER, LOW);
+    digitalWrite(PIN_WARNING_LED, LOW);
 
-    venturiCycleCount = 0;
-    pauseBlockCount   = 0;
+    // Keep system state parked
+    enterState(STATE_IDLE, now);
+    return;
+  }
+
+  // ----------------------------
+  // Warning LED latch management
+  // ----------------------------
+  // "PIN_WARNING_LED accende alla prima attivazione buzzer e rimane acceso
+  // fino a che il sensore torna pieno"
+  //
+  // So: turn OFF only when sensor is FULL again.
+  if (sensorActive) {
+    warningLatched = false;
+  }
+  digitalWrite(PIN_WARNING_LED, warningLatched ? HIGH : LOW);
+
+  // ============================================================
+  // SAFETY OVERRIDE (normal mode)
+  // ------------------------------------------------------------
+  // If trigger OFF OR sensor FULL -> immediate shutdown + reset cycles
+  // ============================================================
+  if (!triggerActive || sensorActive) {
+    allOutputsOff();
+
+    // When system goes safe / idle, we reset cycles + warnings.
+    // If you want to NOT clear warnings on trigger-off, split this logic.
+    resetCycleCounters(true);
 
     enterState(STATE_IDLE, now);
     return;
   }
 
-
-
-  // ================= STATE MACHINE =================
+  // ============================================================
+  // STATE MACHINE (normal mode: trigger ON + sensor NOT FULL)
+  // ============================================================
 
   switch (state) {
 
     case STATE_IDLE:
+      // Start loading sequence immediately when conditions are met
       enterState(STATE_VENTURI_ON, now);
       break;
 
-
-
     case STATE_VENTURI_ON:
       digitalWrite(PIN_VENTURI_RELAY, HIGH);
-      digitalWrite(PIN_STATUS_LED, HIGH);
+      digitalWrite(PIN_LOADING_LED, HIGH);
 
       if (now - stateStart >= VENTURI_ACTIVE_TIME_MS) {
         digitalWrite(PIN_VENTURI_RELAY, LOW);
-        digitalWrite(PIN_STATUS_LED, LOW);
+        digitalWrite(PIN_LOADING_LED, LOW);
 
         venturiCycleCount++;
 
@@ -343,23 +464,40 @@ void loop()
             enterState(STATE_SILENT_WAIT, now);
           }
         } else {
+          // Repeat immediately another ON cycle
           enterState(STATE_VENTURI_ON, now);
         }
       }
       break;
 
-
-
     case STATE_SILENT_WAIT:
+      // Silent pause between blocks
       if (now - stateStart >= SILENT_PAUSE_MS) {
         enterState(STATE_VENTURI_ON, now);
       }
       break;
 
-
-
     case STATE_ALARM_ON:
+      // Alarm ON
       digitalWrite(PIN_BUZZER, HIGH);
+
+      // Warning LED latches ON when buzzer starts (first time)
+      if (!warningLatched) {
+        warningLatched = true;
+        digitalWrite(PIN_WARNING_LED, HIGH);
+      }
+
+      // Count warnings once per entry into this state
+      // Guard window (counts only once per entry)
+      if (now - stateStart < 20) {
+        warningCount++;
+
+        // After N warnings -> pulse pause command (like a button for external system)
+        if (warningCount >= WARNINGS_BEFORE_PAUSE_PULSE) {
+          warningCount = 0;     // reset after pulse (tweak if you want "every 5 warnings" continuously)
+          startPausePulse(now);
+        }
+      }
 
       if (now - stateStart >= ALARM_DURATION_MS) {
         digitalWrite(PIN_BUZZER, LOW);
@@ -367,9 +505,8 @@ void loop()
       }
       break;
 
-
-
     case STATE_ALARM_WAIT:
+      // Wait after alarm
       if (now - stateStart >= ALARM_INTERVAL_MS) {
         enterState(STATE_VENTURI_ON, now);
       }
