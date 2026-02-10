@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Velvet Splash
+Description=Velvet boot splash (splash1 -> splash2)
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/velvet
+ScriptFile=/usr/share/plymouth/themes/velvet/velvet.script
