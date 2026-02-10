@@ -21,7 +21,7 @@ fun refresh_callback () {
 
     # Plymouth refresh ≈ 50Hz
     # 75 ticks ≈ 1.5 seconds
-    if (switched == 0 && ticks >= 75) {
+    if (switched == 0 && ticks >= 50) {
         sprite.SetImage(s2r);
         switched = 1;
     }
