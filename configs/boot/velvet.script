@@ -1,5 +1,5 @@
 # Velvet Plymouth theme
-# splash1 -> splash2 after ~1.5s
+# splash1 -> splash2 after ~2s
 
 s1 = Image("splash.png");
 s2 = Image("splash2.png");
@@ -20,8 +20,8 @@ fun refresh_callback () {
     ticks++;
 
     # Plymouth refresh ≈ 50Hz
-    # 75 ticks ≈ 1.5 seconds
-    if (switched == 0 && ticks >= 50) {
+    # 100 ticks ≈ 2 seconds
+    if (switched == 0 && ticks >= 100) {
         sprite.SetImage(s2r);
         switched = 1;
     }
