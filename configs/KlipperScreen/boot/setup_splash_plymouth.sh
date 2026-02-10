@@ -3,7 +3,7 @@ set -e
 
 echo "=== Velvet Plymouth Splash Setup ==="
 
-THEME_SRC="/home/velvet/shaper-compact/configs/Plymouth/velvet"
+THEME_SRC="/home/velvet/shaper-compact/configs/KlipperScreen/boot"
 THEME_DST="/usr/share/plymouth/themes/velvet"
 BOOT="/boot"
 [ -d /boot/firmware ] && BOOT="/boot/firmware"
