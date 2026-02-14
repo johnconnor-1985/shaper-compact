@@ -161,6 +161,9 @@ bool warningLatched   = false;
 bool pausePulseActive = false;
 unsigned long pausePulseStart = 0;
 
+// Ensures warningCount increments ONLY once per entry into STATE_ALARM_ON
+bool alarmEntryCounted = false;
+
 Debouncer triggerDb;
 Debouncer sensorDb;
 Debouncer forcedDb;
@@ -173,6 +176,11 @@ Debouncer forcedDb;
 static void enterState(SystemState s, unsigned long now) {
   state = s;
   stateStart = now;
+
+  // Reset per-entry guard when we enter ALARM_ON
+  if (s == STATE_ALARM_ON) {
+    alarmEntryCounted = false;
+  }
 }
 
 
@@ -369,24 +377,17 @@ void loop()
 
   // Update debounced inputs
   const bool triggerActive      = debouncerUpdate(triggerDb, now);
-  const bool sensorActive       = debouncerUpdate(sensorDb,  now);   // "true" = sensor says FULL (per original logic)
+  const bool sensorActive       = debouncerUpdate(sensorDb,  now);   // true = sensor says FULL
   const bool forcedLoadingPress = debouncerUpdate(forcedDb,  now);
 
   // ----------------------------
   // Output filtered sensor state
   // ----------------------------
-  // If you prefer the opposite semantic (e.g. "empty"), invert here.
   digitalWrite(PIN_FILTERED_SENSOR_STATE, sensorActive ? HIGH : LOW);
   digitalWrite(PIN_FILTERED_SENSOR_LED,   sensorActive ? HIGH : LOW);
 
   // ============================================================
   // FORCED LOADING OVERRIDE (manual)
-  // ------------------------------------------------------------
-  // Requirement:
-  // • overrides everything (relay ON while pressed)
-  // • resets cycles and warnings
-  // • must turn OFF buzzer and warning LED
-  // • keeps filtered sensor LED/state functionality
   // ============================================================
   if (forcedLoadingPress) {
     // Reset everything so when released we restart clean
@@ -407,10 +408,7 @@ void loop()
   // ----------------------------
   // Warning LED latch management
   // ----------------------------
-  // "PIN_WARNING_LED accende alla prima attivazione buzzer e rimane acceso
-  // fino a che il sensore torna pieno"
-  //
-  // So: turn OFF only when sensor is FULL again.
+  // Warning LED turns OFF only when sensor becomes FULL again.
   if (sensorActive) {
     warningLatched = false;
   }
@@ -418,16 +416,10 @@ void loop()
 
   // ============================================================
   // SAFETY OVERRIDE (normal mode)
-  // ------------------------------------------------------------
-  // If trigger OFF OR sensor FULL -> immediate shutdown + reset cycles
   // ============================================================
   if (!triggerActive || sensorActive) {
     allOutputsOff();
-
-    // When system goes safe / idle, we reset cycles + warnings.
-    // If you want to NOT clear warnings on trigger-off, split this logic.
     resetCycleCounters(true);
-
     enterState(STATE_IDLE, now);
     return;
   }
@@ -487,26 +479,31 @@ void loop()
         digitalWrite(PIN_WARNING_LED, HIGH);
       }
 
-      // Count warnings once per entry into this state
-      // Guard window (counts only once per entry)
-      if (now - stateStart < 20) {
+      // Count warnings EXACTLY ONCE per entry into this state
+      if (!alarmEntryCounted) {
+        alarmEntryCounted = true;
         warningCount++;
 
-        // After N warnings -> pulse pause command (like a button for external system)
+        // After N warnings -> pulse pause command, then restart cycles after the long pause
         if (warningCount >= WARNINGS_BEFORE_PAUSE_PULSE) {
-          warningCount = 0;     // reset after pulse (tweak if you want "every 5 warnings" continuously)
+          warningCount = 0;          // restart "counting to 5" after the pulse
+
+          // restart cycles clean after the alarm wait
+          venturiCycleCount = 0;
+          pauseBlockCount   = 0;
+
           startPausePulse(now);
         }
       }
 
       if (now - stateStart >= ALARM_DURATION_MS) {
         digitalWrite(PIN_BUZZER, LOW);
-        enterState(STATE_ALARM_WAIT, now);
+        enterState(STATE_ALARM_WAIT, now);   // long pause happens here
       }
       break;
 
     case STATE_ALARM_WAIT:
-      // Wait after alarm
+      // Wait after alarm (long pause), then restart cycles
       if (now - stateStart >= ALARM_INTERVAL_MS) {
         enterState(STATE_VENTURI_ON, now);
       }
