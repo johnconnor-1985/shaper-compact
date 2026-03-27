@@ -57,7 +57,7 @@ const int MAX_PAUSE_BLOCKS   = 2;   // Silent pauses before alarm
 const int WARNINGS_BEFORE_PAUSE_PULSE = 5;
 
 // All timings in milliseconds
-const unsigned long VENTURI_ACTIVE_TIME_MS = 5000;   // Valve ON duration
+const unsigned long VENTURI_ACTIVE_TIME_MS = 8000;   // Valve ON duration
 const unsigned long SILENT_PAUSE_MS        = 20000;  // Pause between cycles
 const unsigned long ALARM_DURATION_MS      = 2500;   // Buzzer ON time
 const unsigned long ALARM_INTERVAL_MS      = 30000;  // Pause after alarm
@@ -79,7 +79,12 @@ const unsigned long PAUSE_PULSE_MS         = 1000;   // PIN_PAUSE_COMMAND HIGH f
 //
 
 unsigned long triggerDebounceMs = 1000;
-unsigned long sensorDebounceMs  = 1000;
+
+// SENSOR debounce asymmetrico:
+// - FULL  -> EMPTY : rapido
+// - EMPTY -> FULL  : lento
+unsigned long sensorDebounceToEmptyMs = 1000;
+unsigned long sensorDebounceToFullMs  = 4000;
 
 // Forced loading should feel like a "button": typically shorter debounce
 unsigned long forcedDebounceMs  = 120;
@@ -110,6 +115,8 @@ struct Debouncer {
   bool inverted;
 
   unsigned long totalDebounceMs;
+  unsigned long debounceMsToTrue;
+  unsigned long debounceMsToFalse;
   unsigned int samples;
 
   bool stableState;
@@ -133,6 +140,13 @@ static void debouncerInit(Debouncer &d,
                           unsigned long totalDebounceMs,
                           unsigned int samples,
                           bool initialStable);
+static void debouncerInitAsymmetric(Debouncer &d,
+                                    uint8_t pin,
+                                    bool inverted,
+                                    unsigned long debounceMsToTrue,
+                                    unsigned long debounceMsToFalse,
+                                    unsigned int samples,
+                                    bool initialStable);
 static bool debouncerUpdate(Debouncer &d, unsigned long now);
 
 static void allOutputsOff();
@@ -208,6 +222,31 @@ static void debouncerInit(Debouncer &d,
   d.pin = pin;
   d.inverted = inverted;
   d.totalDebounceMs = totalDebounceMs;
+  d.debounceMsToTrue = totalDebounceMs;
+  d.debounceMsToFalse = totalDebounceMs;
+  d.samples = (samples == 0 ? 1 : samples);
+
+  d.stableState = initialStable;
+
+  d.debouncing = false;
+  d.candidateState = initialStable;
+  d.okSamples = 0;
+  d.nextSampleAt = 0;
+}
+
+static void debouncerInitAsymmetric(Debouncer &d,
+                                    uint8_t pin,
+                                    bool inverted,
+                                    unsigned long debounceMsToTrue,
+                                    unsigned long debounceMsToFalse,
+                                    unsigned int samples,
+                                    bool initialStable)
+{
+  d.pin = pin;
+  d.inverted = inverted;
+  d.totalDebounceMs = 0;
+  d.debounceMsToTrue = debounceMsToTrue;
+  d.debounceMsToFalse = debounceMsToFalse;
   d.samples = (samples == 0 ? 1 : samples);
 
   d.stableState = initialStable;
@@ -232,13 +271,15 @@ static bool debouncerUpdate(Debouncer &d, unsigned long now)
     d.candidateState = currentReading;
     d.okSamples = 0;
 
-    const unsigned long interval = d.totalDebounceMs / d.samples;
+    const unsigned long debounceMs = d.candidateState ? d.debounceMsToTrue : d.debounceMsToFalse;
+    const unsigned long interval = (debounceMs / d.samples == 0) ? 1 : (debounceMs / d.samples);
     d.nextSampleAt = now + interval;
     return d.stableState;
   }
 
   if (d.debouncing) {
-    const unsigned long interval = d.totalDebounceMs / d.samples;
+    const unsigned long debounceMs = d.candidateState ? d.debounceMsToTrue : d.debounceMsToFalse;
+    const unsigned long interval = (debounceMs / d.samples == 0) ? 1 : (debounceMs / d.samples);
 
     while (d.debouncing && (long)(now - d.nextSampleAt) >= 0) {
       const bool sampleReading = readPin(d.pin, d.inverted);
@@ -352,9 +393,11 @@ void setup()
                 triggerDebounceMs, debounceSamples,
                 readPin(PIN_TRIGGER, TRIGGER_INVERTED));
 
-  debouncerInit(sensorDb, PIN_SENSOR, SENSOR_INVERTED,
-                sensorDebounceMs, debounceSamples,
-                readPin(PIN_SENSOR, SENSOR_INVERTED));
+  debouncerInitAsymmetric(sensorDb, PIN_SENSOR, SENSOR_INVERTED,
+                          sensorDebounceToFullMs,   // false -> true  = EMPTY -> FULL
+                          sensorDebounceToEmptyMs,  // true  -> false = FULL  -> EMPTY
+                          debounceSamples,
+                          readPin(PIN_SENSOR, SENSOR_INVERTED));
 
   debouncerInit(forcedDb, PIN_FORCED_LOADING, FORCED_LOADING_INVERTED,
                 forcedDebounceMs, forcedSamples,
