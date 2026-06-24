@@ -81,10 +81,10 @@ const unsigned long PAUSE_PULSE_MS         = 1000;   // PIN_PAUSE_COMMAND HIGH f
 unsigned long triggerDebounceMs = 1000;
 
 // SENSOR debounce asymmetrico:
-// - FULL  -> EMPTY : rapido
-// - EMPTY -> FULL  : lento
+// - FULL  -> EMPTY : quick
+// - EMPTY -> FULL  : slow
 unsigned long sensorDebounceToEmptyMs = 1000;
-unsigned long sensorDebounceToFullMs  = 4000;
+unsigned long sensorDebounceToFullMs  = 6000;
 
 // Forced loading should feel like a "button": typically shorter debounce
 unsigned long forcedDebounceMs  = 120;
